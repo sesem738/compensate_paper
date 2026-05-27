@@ -56,21 +56,18 @@
 %===============================================================================
 
 \begin{abstract}
-	Robotic manipulators in safety-critical settings are vulnerable to silent joint failures that
-	abruptly degrade performance, yet classical fault-tolerant strategies depend on accurate dynamic
-	models or hand-crafted recovery rules that presuppose an explicit fault signal. We present
-	\textbf{COMPENSATE}, a teacher-student reinforcement learning framework for fault-tolerant
-	manipulation built on three coupled choices: a \emph{privileged teacher ensemble} with one PPO
-	specialist per failure mode, a \emph{fault-blind student} distilled by hard per-environment
-	teacher routing so that the active fault must be inferred from proprioception alone, and a
-	\emph{staged fault curriculum} paired with cross-simulator validation in mjlab that filters out
-	engine-specific artifacts before any hardware trial. On a Franka Research~3 reach task under
-	per-joint permanent lockouts, the privileged teachers attain 90.0\% mean success at 0.038~m
-	end-effector error, and the fault-blind student retains 65.0\% success at 0.051~m, outperforming
-	a diffusion policy trained on the same teacher-generated data by 16 percentage points of success
-	and roughly halving the residual position error. The 25-point teacher-to-student gap quantifies
-	the cost of withholding the fault indicator and supports the central design choice of decoupling
-	training-time privilege from deployment-time observability.
+	Robotic manipulators operating in industrial and safety-critical environments are vulnerable to joint
+	failures that can abruptly degrade performance, yet existing fault-tolerant strategies rely on accurate
+	dynamic models or predefined recovery procedures that do not generalize across diverse failure modes.
+	We present COMPENSATE, a deep reinforcement learning framework in which specialized teacher policies
+	trained on individual failure configurations are distilled into a unified student policy that detects
+	and adapts to joint failures in real time, without any explicit fault signal. By incorporating
+	permanent lockouts, degraded stiffness, and simultaneous multi-joint faults into the training
+	distribution, COMPENSATE learns compensation strategies that transfer to unseen failure types. We
+	evaluate on reach and lift tasks in IsaacLab with cross-simulator validation in mjlab and zero-shot
+	deployment on a Franka Research~3 arm. Against standard PPO, a diffusion policy baseline, and a
+	fault-aware inverse kinematics controller, COMPENSATE achieves superior task completion rates and
+	adaptation speed while maintaining smooth operational transitions under diverse joint failure conditions.
 \end{abstract}
 
 % Two or three meaningful keywords should be added here
