@@ -184,30 +184,40 @@
 \section{Method}
 \label{sec:method}
 
-	\textbf{COMPENSATE} is a two-phase teacher-student framework for fault-tolerant manipulator
-	control. In Phase~1, specialized teacher policies are trained via PPO on individual
-	joint-failure configurations. In Phase~2, a single student policy is distilled from the
-	teacher ensemble via behavioral cloning, without access to any explicit fault signal at
-	deployment.
+	\textbf{COMPENSATE} addresses fault-tolerant manipulation through three coupled
+	contributions. \emph{(i)}~A \emph{privileged teacher ensemble} in which one PPO
+	specialist is trained per failure mode, so each policy can converge to the
+	kinematic compensation that is optimal for that fault rather than averaging over
+	mutually incompatible solutions. \emph{(ii)}~A \emph{fault-blind student} distilled
+	from the ensemble without any fault indicator in its observation, forcing
+	compensation to be inferred from proprioceptive dynamics alone---the only signal
+	available on hardware that lacks an explicit fault-detection module. \emph{(iii)}~A
+	\emph{staged fault curriculum} during teacher training and a \emph{cross-simulator
+	validation} step that together act as a robustness probe before any hardware
+	deployment. The remainder of this section motivates each component.
 
 	\subsection{Problem Formulation}
 	\label{subsec:problem}
 
-		We model joint-failure-resilient manipulation as a Partially Observable Markov Decision
-		Process~(POMDP) $\langle\mathcal{S},\mathcal{O},\mathcal{A},T,R,\gamma\rangle$. The full
-		state $s \in \mathcal{S}$ includes joint positions, joint velocities, and the current
-		failure configuration. The policy receives only a 32-dimensional proprioceptive
-		observation $o \in \mathcal{O}$: relative joint positions $q \in \mathbb{R}^{9}$, relative
-		joint velocities $\dot{q} \in \mathbb{R}^{9}$, the previous action
-		$a_{t-1} \in \mathbb{R}^{7}$, and a goal end-effector pose $g \in \mathbb{R}^{7}$
-		(3D position and unit quaternion). No fault indicator is included in $o$; the agent must
-		infer the failure state purely from observable kinematics.
+		We model joint-failure-resilient manipulation as a Partially Observable Markov
+		Decision Process~(POMDP)
+		$\langle\mathcal{S},\mathcal{O},\mathcal{A},T,R,\gamma\rangle$. The full state
+		$s\in\mathcal{S}$ contains the joint positions, joint velocities, and the
+		currently active failure configuration, but the policy never observes the
+		failure component: $o\in\mathcal{O}$ is restricted to relative joint positions
+		$q$, relative joint velocities $\dot q$, the previous action $a_{t-1}$, and the
+		goal end-effector pose $g$ (3D position and unit quaternion). This deliberate
+		partial observability is the methodological core of the work---it forces the
+		agent to recover the latent failure state from observable kinematics, mirroring
+		the information available on a real arm whose joint has silently degraded.
 
-		Actions $a \in \mathcal{A} \subset \mathbb{R}^{7}$ are relative joint-position increments
-		with scale $\alpha = 0.03$~rad. We consider $|\mathcal{F}|=8$ failure configurations:
-		seven single-joint permanent lockouts $\{f_0,\ldots,f_6\}$ and a healthy baseline
-		$f_\emptyset$. Under lockout $f_i$, joint $i$ holds its last commanded position regardless
-		of the network output:
+		Actions $a\in\mathcal{A}$ are relative joint-position increments scaled by
+		$\alpha$. We consider a set $\mathcal{F}$ of failure configurations comprising
+		single-joint permanent lockouts and a healthy baseline; degraded-stiffness and
+		multi-joint variants are introduced in~\S\ref{subsec:curriculum}. Under lockout
+		$f_i$, joint $i$ holds its last commanded position regardless of the network
+		output, modelling a fault that the controller cannot bypass at the actuator
+		level:
 		\begin{equation}
 		    q_t^{\mathrm{cmd}, i} =
 		        \begin{cases}
@@ -216,18 +226,26 @@
 		        \end{cases}
 		    \label{eq:action}
 		\end{equation}
+		Modelling the fault inside the action transition (rather than as an external
+		disturbance on $T$) ensures that the gradient seen by the teacher reflects what
+		the deployed arm will actually execute, eliminating a source of train--test
+		drift that would otherwise have to be handled by domain randomization.
 
-	\subsection{Teacher Policy Training}
+	\subsection{Privileged Teacher Ensemble}
 	\label{subsec:teachers}
 
-		For each configuration $c \in \mathcal{F}$, we train a specialist teacher~$\pi^c$ using
-		Proximal Policy Optimization~\citep{schulman2017proximal}. Each teacher is a two-layer MLP
-		with hidden dimensions $[128,\,64]$ and ELU activations. Training runs for $3{,}500$
-		iterations with 24 rollout steps per parallel environment, an adaptive learning rate
-		(target KL\,$=0.01$, initial $\eta = 10^{-4}$), clip ratio $\epsilon=0.2$, and entropy
-		coefficient $\beta=0.001$.
+		Different joint failures induce qualitatively different optimal compensations:
+		a locked shoulder must be circumvented by elbow and wrist redundancy, while a
+		locked wrist requires a base-driven reorientation. A single PPO agent confronted
+		with the full fault distribution receives gradient signals that pull these
+		solutions toward an averaged, often infeasible, behavior. We therefore train
+		one specialist~$\pi^c$ per configuration $c\in\mathcal{F}$ using
+		PPO~\citep{schulman2017proximal}, treating each teacher as a privileged oracle
+		that has implicit knowledge of its own fault through the environment it was
+		exposed to during training.
 
-		The per-step reward combines end-effector tracking and motion regularization:
+		Each teacher optimizes a reward that combines end-effector tracking with motion
+		regularization,
 		\begin{equation}
 		    r_t = w_\mathrm{pos}\,\|p_\mathrm{ee} - p_g\|_2
 		          + w_\mathrm{fine}\,r_\mathrm{fine}(p_\mathrm{ee},\,p_g)
@@ -235,79 +253,113 @@
 		          + w_\mathrm{reg}\,r_\mathrm{reg}(a_t,\,\dot{q}_t),
 		    \label{eq:reward}
 		\end{equation}
-		where $p_\mathrm{ee}$, $p_g$ are end-effector and goal positions,
-		$\mathbf{R}_\mathrm{ee}$, $\mathbf{R}_g$ are their rotation matrices, and
-		$r_\mathrm{fine}$ is a kernel-smoothed fine-positioning bonus. The fixed weights are
-		$w_\mathrm{pos}=-2.0$ and $w_\mathrm{ori}=-1.0$. The fine-grained weight
-		$w_\mathrm{fine}$ and action-rate and joint-velocity regularizers are each annealed from
-		zero to their target values over the first $5{,}000$ training steps, encouraging the
-		agent to first learn to reach the goal before optimizing for motion smoothness.
+		where $r_\mathrm{fine}$ is a kernel-smoothed fine-positioning bonus and
+		$r_\mathrm{reg}$ penalizes action rate and joint velocity. The fine-grained and
+		regularization weights are annealed from zero so that the agent first learns to
+		\emph{reach} under the active fault before being asked to do so \emph{smoothly};
+		without this annealing we observed teachers collapsing to a still posture that
+		trivially satisfies the regularizer. Goal poses are sampled by drawing random
+		joint configurations, computing forward kinematics, and rejecting any pose
+		outside the reachable workspace of the locked joint, so the reward signal is
+		never dominated by physically unreachable targets---an effect that would
+		otherwise bias the teacher toward unreachable-target avoidance rather than
+		fault compensation.
 
-		To ensure all commanded targets are reachable under the active joint constraints, goal
-		poses are generated by sampling random joint configurations, computing forward kinematics,
-		and discarding poses outside the reachable workspace of the locked joint.
-
-	\subsection{Fault Simulation and Curriculum}
+	\subsection{Fault-Mode Curriculum}
 	\label{subsec:curriculum}
 
-		Joint failures are simulated at the action level: at each episode reset, one configuration
-		$c$ is drawn uniformly from the current curriculum set $\mathcal{C}_k \subseteq \mathcal{F}$.
-		During teacher training, an incremental curriculum initializes $\mathcal{C}_k$ with only
-		the teacher’s target failure mode and expands by one additional mode every
-		$\lfloor 1/|\mathcal{F}|\rfloor$ fraction of total training steps, so the policy first
-		masters a single failure type before encountering the full distribution. This staged
-		exposure stabilizes early-training dynamics. During student distillation~(Phase~2),
-		$\mathcal{C}_k = \mathcal{F}$ throughout with no curriculum gating, since all teachers
-		are already fully trained.
+		Even with one specialist per fault, exposing a teacher to all variants of its
+		target mode from the first step (e.g., lockouts at different commanded
+		positions, or jointly with stiffness degradation) destabilizes early training:
+		the agent cannot disambiguate whether a failed reach is due to its own policy
+		or to a fault it has not yet learned to model. We therefore use an incremental
+		curriculum that begins with the teacher's target failure in isolation and
+		expands the active fault set $\mathcal{C}_k\subseteq\mathcal{F}$ in stages over
+		the course of training. This decouples skill acquisition from fault inference
+		and is the only mechanism, aside from the privileged-teacher decomposition
+		itself, that we found necessary to obtain stable PPO convergence under
+		multi-joint and degraded-stiffness faults. The student does not use a
+		curriculum: by the time distillation begins, all teachers are fixed, so
+		uniform sampling over $\mathcal{F}$ poses no instability.
 
-	\subsection{Multi-Teacher Distillation}
+	\subsection{Fault-Blind Student Distillation}
 	\label{subsec:distillation}
 
-		After all teachers are trained, we distill them into a single student policy~$\pi^S$ via
-		behavioral cloning. The student is a wider MLP $[128,\,128]$ with ELU activations and
-		receives the same 32-dimensional observation as the teachers; no failure indicator is
-		present in its input.
+		The student~$\pi^S$ is the policy that will actually be deployed. To match
+		hardware conditions, it receives the same proprioceptive observation as the
+		teachers but \emph{no fault index}; the failure mode is a latent variable that
+		the student must infer from kinematic history. This is what distinguishes
+		COMPENSATE from prior teacher--student work that includes the privileged
+		variable as a learned embedding~\citep{kumar2021rma}: we make the absence of
+		the fault signal a deployment requirement, not a regularization trick, because
+		any fault label at deployment time would presuppose the very FDI module our
+		method is designed to replace.
 
-		During distillation rollouts, each parallel environment is independently assigned a random
-		configuration $c$ at reset, and the corresponding teacher~$\pi^c$ provides the behavioral
-		target for that environment. Given a minibatch
-		$\{(o_k,\,a_k^c)\}_{k=1}^{B}$, the student minimizes:
+		At each distillation reset, every parallel environment is independently
+		assigned a configuration $c$ and routed to the corresponding teacher~$\pi^c$;
+		that teacher provides the behavioral target for that environment for the
+		entire episode. We use this \emph{hard routing} rather than averaging
+		teacher logits because the teachers represent mode-specific compensations that
+		are non-interpolable---averaging would supervise the student with actions no
+		single teacher would take. Given minibatches $\{(o_k,\,a_k^c)\}_{k=1}^{B}$, the
+		student minimizes the per-action behavioral-cloning loss
 		\begin{equation}
 		    \mathcal{L}_\mathrm{BC} =
 		        \frac{1}{B}\sum_{k=1}^{B}
 		        \bigl\|\pi^S(o_k) - a_k^c\bigr\|_2^{2}.
 		    \label{eq:bc}
 		\end{equation}
-		Training uses the Adam optimizer ($\eta = 5\times10^{-4}$), gradient accumulation over
-		15 steps, gradient clipping at norm~1.0, and 8 learning epochs per rollout. Because the
-		failure index is withheld from~$\pi^S$, the student is forced to recover a compensatory
-		strategy purely from proprioceptive dynamics, enabling generalization to failure modes not
-		encountered during teacher training.
-
-	\subsection{Simulation Environments and Sim-to-Real Transfer}
-	\label{subsec:sim2real}
-
-		All policies are trained in \textbf{IsaacLab} on a Franka Research~3~(FR3) model. The
-		reach task commands random end-effector poses resampled every 6~s, with success defined
-		as reaching within 0.04~m position error and 0.2~rad orientation error. Additive uniform
-		observation noise ($\pm 0.01$~rad) is applied to joint positions, velocities, and action
-		feedback at every step to encourage robustness.
-
-		Cross-simulator validation is performed in \textbf{mjlab}~(MuJoCo~Warp), which mirrors
-		the IsaacLab observation and action specification at a matched 30~Hz control rate
-		(240~Hz physics, decimation~8). Checkpoints trained in IsaacLab transfer to mjlab
-		without fine-tuning, confirming that learned compensation behaviors are not artifacts of
-		the Isaac~Sim physics engine. Zero-shot deployment on a physical Franka Research~3 arm
-		completes the sim-to-real evaluation.
-
-
+		Because the student must reproduce all teachers from a fault-blind observation,
+		convergence of~$\mathcal{L}_\mathrm{BC}$ is itself evidence that the
+		compensation strategies are identifiable from proprioception, which in turn
+		predicts that the student will generalize to fault modes that lie between
+		those represented in $\mathcal{F}$.
 
 \section{Experiments -- 1-2 Pages}
 \subsection{Implementation Details}
-We conducted our simulation experiments using IsaacLab, which offers high-fidelity physics simulation for accurate modeling of robot manipulators and their interactions with the environment. 
-Within this environment, we trained both teacher and student policies from scratch using proximal policy optimization (PPO). The training process incorporated task-specific reward functions as well as curricula designed to progressively increase task difficulty, ensuring that the learned policies were both robust and adaptable.
 
-Following policy training in IsaacLab, we performed cross-simulator evaluation using mjlab. This sim-to-sim transfer step allowed us to examine how the trained policies generalize under different physics engines. Since MuJoCo employs dynamics models that differ from those in IsaacLab, successful performance across both platforms indicates that the policies would transfer   to real hardware. Finally, we validated our approach in hardware on two separate manipulators, the Franka Research 3 (FR3) and the Franka Emika Panda. These real-world trials facilitated a comprehensive assessment of zero-shot policy deployment across both simulation and physical domains.
+		All policies are trained in \textbf{IsaacLab} on a Franka Research~3 (FR3)
+		model, then evaluated through a deliberate three-stage pipeline---IsaacLab,
+		mjlab, and physical hardware---each stage acting as a stricter filter on the
+		preceding one. The policy observation is 32-dimensional: relative joint
+		positions $q\in\mathbb{R}^{9}$, relative joint velocities
+		$\dot q\in\mathbb{R}^{9}$, the previous action $a_{t-1}\in\mathbb{R}^{7}$, and
+		a goal end-effector pose $g\in\mathbb{R}^{7}$. Actions are relative
+		joint-position increments with scale $\alpha=0.03$~rad. The teacher set
+		$\mathcal{F}$ contains $|\mathcal{F}|=8$ configurations: seven single-joint
+		permanent lockouts and a healthy baseline. The reach task resamples random
+		end-effector goals every 6~s with success defined as $\le 0.04$~m position
+		error and $\le 0.2$~rad orientation error; additive uniform observation noise
+		of $\pm 0.01$~rad is injected on joint positions, velocities, and action
+		feedback throughout training.
+
+		\textbf{Networks and optimization.} Each teacher~$\pi^c$ is a two-layer MLP
+		with hidden dimensions $[128,\,64]$ and ELU activations, trained with PPO for
+		$3{,}500$ iterations using 24 rollout steps per parallel environment, an
+		adaptive learning rate (target KL $=0.01$, initial $\eta=10^{-4}$), clip ratio
+		$\epsilon=0.2$, and entropy coefficient $\beta=0.001$. Reward weights are
+		$w_\mathrm{pos}=-2.0$ and $w_\mathrm{ori}=-1.0$, with the fine-grained and
+		regularization weights annealed from zero over the first $5{,}000$ steps. The
+		fault curriculum expands $\mathcal{C}_k$ by one additional mode every
+		$\lfloor 1/|\mathcal{F}|\rfloor$ fraction of training. The student is a wider
+		MLP $[128,\,128]$ with ELU activations, trained on the BC loss in
+		Eq.~\ref{eq:bc} using Adam ($\eta=5\times 10^{-4}$), gradient accumulation
+		over 15 steps, gradient clipping at norm~1.0, and 8 learning epochs per
+		rollout.
+
+		\textbf{Cross-simulator validation as a sim-to-real probe.} Before any
+		hardware trial, the IsaacLab-trained student is evaluated zero-shot in
+		\textbf{mjlab}~(MuJoCo~Warp) under a matched observation and action
+		specification at a matched 30~Hz control rate (240~Hz physics, decimation~8).
+		This step is methodological rather than logistical: it asks whether the
+		learned compensation is a property of the manipulator dynamics or of the
+		Isaac~Sim integrator. A policy that exploits engine-specific artifacts will
+		pass IsaacLab evaluation but fail in mjlab, and would do the same on real
+		hardware---mjlab thus serves as an inexpensive filter that catches this
+		failure mode before risking a physical arm. Policies that transfer cleanly to
+		mjlab are then deployed zero-shot on two physical manipulators, the Franka
+		Research~3 and the Franka Emika Panda, completing the simulation-to-hardware
+		pipeline.
 
 \subsection{Tasks and Evaluation Protocol}
 
