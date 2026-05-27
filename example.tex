@@ -55,11 +55,18 @@
 %===============================================================================
 
 \begin{abstract}
-    Robotic manipulators operating in industrial and safety-critical environments are vulnerable to joint failures that can abruptly degrade performance, yet existing fault-tolerant strategies rely on accurate dynamic models or predefined recovery procedures that do not generalize across diverse failure modes.
-    We present COMPENSATE, a deep reinforcement learning framework in which specialized teacher policies trained on individual failure configurations are distilled into a unified student policy that detects and adapts to joint failures in real time, without any explicit fault signal.
-    By incorporating permanent lockouts, degraded stiffness, and simultaneous multi-joint faults into the training distribution, COMPENSATE learns compensation strategies that transfer to unseen failure types.
-    We evaluate on reach and lift tasks in IsaacLab with cross-simulator validation in mjlab and zero-shot deployment on a Franka Research~3 arm.
-    Against standard PPO, a diffusion policy baseline, and a fault-aware inverse kinematics controller, COMPENSATE achieves superior task completion rates and adaptation speed while maintaining smooth operational transitions under diverse joint failure conditions.
+	Robotic manipulators operating in industrial and safety-critical environments are vulnerable to joint
+	failures that can abruptly degrade performance, yet existing fault-tolerant strategies rely on accurate
+	dynamic models or predefined recovery procedures that do not generalize across diverse failure modes.
+	We present COMPENSATE, a deep reinforcement learning framework in which specialized teacher policies
+	trained on individual failure configurations are distilled into a unified student policy that detects
+	and adapts to joint failures in real time, without any explicit fault signal. By incorporating
+	permanent lockouts, degraded stiffness, and simultaneous multi-joint faults into the training
+	distribution, COMPENSATE learns compensation strategies that transfer to unseen failure types. We
+	evaluate on reach and lift tasks in IsaacLab with cross-simulator validation in mjlab and zero-shot
+	deployment on a Franka Research~3 arm. Against standard PPO, a diffusion policy baseline, and a
+	fault-aware inverse kinematics controller, COMPENSATE achieves superior task completion rates and
+	adaptation speed while maintaining smooth operational transitions under diverse joint failure conditions.
 \end{abstract}
 
 % Two or three meaningful keywords should be added here
@@ -69,107 +76,252 @@
 
 \section{Introduction}
 
-Robotic manipulators are a cornerstone of modern industrial applications,
-performing repetitive, high-precision tasks with speed and reliability~\citep{ali2018vision, ghodsian2023mobile}. Recent advances in artificial intelligence~(AI) have expanded the capabilities
-of robotic systems, enabling them to learn, adapt, and make independent decisions~\citep{sun2021artificial, liu2021deep, li2024manipllm}. Yet despite these advances, a fundamental vulnerability persists: mechanical malfunctions (arising from joint wear, actuator fatigue, or unexpected environmental loading) can abruptly degrade performance or cause complete
-task failure~\citep{291826, sciavicco2012modelling}. As manipulators are deployed in safety-critical domains such as healthcare, manufacturing, and field robotics, the ability to maintain task performance through joint failures has become essential, while most deployed systems
-still rely on predefined, fault-unaware control policies~\citep{deloitte2025smart, allaboutai2025report}.
+	Robotic manipulators are a cornerstone of modern industrial applications, performing repetitive,
+	high-precision tasks with speed and reliability~\citep{ali2018vision, ghodsian2023mobile}. Recent
+	advances in artificial intelligence~(AI) have expanded the capabilities of robotic systems, enabling
+	them to learn, adapt, and make independent decisions~\citep{sun2021artificial, liu2021deep,
+	li2024manipllm}. Yet despite these advances, a fundamental vulnerability persists: mechanical
+	malfunctions (arising from joint wear, actuator fatigue, or unexpected environmental loading) can
+	abruptly degrade performance or cause complete task failure~\citep{291826, sciavicco2012modelling}.
+	As manipulators are deployed in safety-critical domains such as healthcare, manufacturing, and field
+	robotics, the ability to maintain task performance through joint failures has become essential, while
+	most deployed systems still rely on predefined, fault-unaware control
+	policies~\citep{deloitte2025smart, allaboutai2025report}.
 
+	Traditional fault management strategies address this vulnerability through hardware redundancy and
+	fault diagnosis and isolation~(FDI). Redundancy-based approaches add actuators or parallel kinematic
+	chains so that a single joint failure does not halt operation~\citep{291826, anand2012fault,
+	mokhtari2022fault}, but incur substantial cost, weight, and design complexity. FDI techniques
+	(spanning signal-processing anomaly detection~\citep{kimevaluation, ompusunggu2014winding}, rule-based
+	expert systems~\citep{li2023open}, and model-based deviation monitors~\citep{shuai2022research,
+	sabry2019fault}) can identify that a fault has occurred, yet they do not synthesize an adapted control
+	policy in response; a separate, hand-crafted recovery layer is still required.
 
+	Machine learning has begun to close this gap. Predictive maintenance and anomaly detection models can
+	anticipate failures before they occur or flag deviations during operation~\citep{lian2022anomaly,
+	eski2011fault}, and recent work demonstrates that learning directly from observed robot failures
+	(including recovery in long-horizon manipulation tasks) is feasible~\citep{huang2025fail2progress}.
+	Generative approaches such as counterfactual failure synthesis can further produce diverse fault
+	rollouts from successful demonstrations, reaching 81.3\% correction accuracy~\citep{wang2025learning}.
+	Nevertheless, these methods presuppose either a corpus of failure demonstrations or an explicit
+	fault-detection signal as input; when a joint degrades silently mid-task and no labeled failure data
+	are available, they cannot generate an online, adaptive control response.
 
-Traditional fault management strategies address this vulnerability through hardware redundancy and fault diagnosis and isolation~(FDI). Redundancy-based approaches add actuators or parallel kinematic chains so that a single joint failure does not halt operation~\citep{291826, anand2012fault, mokhtari2022fault}, but incur substantial cost, weight, and design complexity.
-FDI techniques (spanning signal-processing anomaly detection~\citep{kimevaluation, ompusunggu2014winding}, rule-based expert systems~\citep{li2023open}, and model-based deviation
-monitors~\citep{shuai2022research, sabry2019fault}) can identify that a fault has occurred, yet they do not synthesize an adapted control policy in response; a separate, hand-crafted recovery layer is still required. 
+	The robotics community has increasingly turned to reinforcement learning~(RL) to overcome this
+	limitation. For legged locomotion, contrastive forward-prediction RL enables agents to detect joint
+	damage from proprioceptive signals alone and immediately reconfigure gait without any explicit fault
+	label~\citep{fu2025contrastive}. For visuomotor policies, latent-space RL can steer a pretrained
+	diffusion policy toward successful outcomes with minimal additional
+	samples~\citep{wagenmaker2025steering}, and sim-to-real transfer via massive parallel sampling with
+	active domain exploration has demonstrated 42--63\% performance gains over strong
+	baselines~\citep{sobanbabu2025sampling}. These results confirm that RL-based adaptation is a
+	principled direction for fault-tolerant robotics, yet they only address locomotion. The specific
+	challenge of reactive joint-failure compensation for \emph{robot manipulator} reaching tasks in real
+	hardware deployments remains underexplored.
 
-Machine learning has begun to close this gap. Predictive maintenance and anomaly detection models can anticipate failures before they occur or flag deviations during operation~\citep{lian2022anomaly, eski2011fault}, and recent work demonstrates that learning directly from observed robot failures (including recovery in long-horizon manipulation tasks) is feasible~\citep{huang2025fail2progress}. Generative approaches such as counterfactual failure synthesis can further produce diverse fault rollouts from successful demonstrations, reaching
-81.3\% correction accuracy~\citep{wang2025learning}. Nevertheless, these methods presuppose either a corpus of failure demonstrations or an explicit fault-detection signal as input; when a joint
-degrades silently mid-task and no labeled failure data are available, they cannot generate an online, adaptive control response.
-
-The robotics community has increasingly turned to reinforcement learning~(RL)
-to overcome this limitation. For legged locomotion, contrastive forward-prediction RL enables agents to detect joint damage from proprioceptive signals alone and immediately
-reconfigure gait without any explicit fault label~\citep{fu2025contrastive}. For visuomotor policies, latent-space RL can steer a pretrained diffusion policy toward successful outcomes with minimal additional samples~\citep{wagenmaker2025steering}, and sim-to-real transfer via massive
-parallel sampling with active domain exploration has demonstrated 42--63\% performance gains over strong baselines~\citep{sobanbabu2025sampling}. These results confirm that RL-based adaptation is a principled direction for fault-tolerant robotics, yet they only address locomotion. The specific challenge of reactive joint-failure compensation for \emph{robot manipulator} reaching tasks in real hardware deployments remains underexplored.
-
-To address this gap, we present \textbf{COMPENSATE}, a deep reinforcement learning framework for fault-tolerant control of robotic manipulators. COMPENSATE employs a \emph{teacher-student} architecture: specialized teacher policies are first trained on individual failure configurations, then distilled into a unified student policy that adapts in real time without any explicit
-fault signal~\citep{pham2024adaptive}. Our contributions are threefold. \emph{(i)}~A teacher-student distillation scheme that generalizes across \emph{permanent lockouts}, \emph{degraded stiffness}, and \emph{simultaneous multi-joint faults}, covering both seen and unseen failure modes at test time. \emph{(ii)}~Sim-to-real transfer demonstrated by zero-shot deployment on a
-Franka Research~3 arm, with cross-simulator validation in mjlab confirming policy robustness beyond the IsaacLab training environment. \emph{(iii)}~Comprehensive benchmarking against standard PPO, a diffusion policy baseline, and a fault-aware inverse kinematics controller, showing superior task completion and adaptation speed across reach and lift tasks.
+	To address this gap, we present \textbf{COMPENSATE}, a deep reinforcement learning framework for
+	fault-tolerant control of robotic manipulators. COMPENSATE employs a \emph{teacher-student}
+	architecture: specialized teacher policies are first trained on individual failure configurations,
+	then distilled into a unified student policy that adapts in real time without any explicit fault
+	signal~\citep{pham2024adaptive}. Our contributions are threefold. \emph{(i)}~A teacher-student
+	distillation scheme that generalizes across \emph{permanent lockouts}, \emph{degraded stiffness},
+	and \emph{simultaneous multi-joint faults}, covering both seen and unseen failure modes at test time.
+	\emph{(ii)}~Sim-to-real transfer demonstrated by zero-shot deployment on a Franka Research~3 arm,
+	with cross-simulator validation in mjlab confirming policy robustness beyond the IsaacLab training
+	environment. \emph{(iii)}~Comprehensive benchmarking against standard PPO, a diffusion policy
+	baseline, and a fault-aware inverse kinematics controller, showing superior task completion and
+	adaptation speed across reach and lift tasks.
 
 %===============================================================================
 
 \section{Related Work}
 \label{sec:related}
 
-\textbf{Classical fault-tolerant control.}
-Fault-tolerant control for robotic manipulators has long relied on model-based
-methods.
-Early strategies applied passive and active hardware redundancy so that joint
-failures would not halt operation, while fault diagnosis and isolation~(FDI)
-detected deviations from known system
-models~\citep{blanke, 291826, sciavicco2012modelling}.
-More recent designs embed backstepping or sliding-mode controllers that
-maintain tracking under actuator faults~\citep{anand2012fault, mokhtari2022fault,
-act11120353}.
-These methods are analytically rigorous but require accurate dynamics models
-and hand-crafted recovery rules, limiting their applicability to anticipated,
-well-characterized fault modes.
+	\textbf{Classical fault-tolerant control.} Fault-tolerant control for robotic manipulators has long
+	relied on model-based methods. Early strategies applied passive and active hardware redundancy so that
+	joint failures would not halt operation, while fault diagnosis and isolation~(FDI) detected deviations
+	from known system models~\citep{blanke, 291826, sciavicco2012modelling}. More recent designs embed
+	backstepping or sliding-mode controllers that maintain tracking under actuator
+	faults~\citep{anand2012fault, mokhtari2022fault, act11120353}. These methods are analytically rigorous
+	but require accurate dynamics models and hand-crafted recovery rules, limiting their applicability to
+	anticipated, well-characterized fault modes.
 
-\textbf{Learning-based fault detection and diagnosis.}
-Data-driven methods have substantially improved fault detection speed and
-accuracy.
-Neural networks, deep belief networks, and power-signature analysis can flag
-incipient anomalies before hard failures
-occur~\citep{eski2011fault, sabry2019fault, shuai2022research, raouf2022mechanical}.
-Inverse reinforcement learning has been applied to simultaneously detect
-anomalies and propose corrective actions in autonomous
-systems~\citep{lian2022anomaly}, and deep-learning diagnosis has been extended
-to multi-fault industrial robots~\citep{adam2023multiple}.
-Detection alone, however, does not yield an adapted control policy; a
-separate recovery layer is still required, and these methods are unreliable
-when failures evolve gradually with no labeled fault data available.
+	\textbf{Learning-based fault detection and diagnosis.} Data-driven methods have substantially improved
+	fault detection speed and accuracy. Neural networks, deep belief networks, and power-signature analysis
+	can flag incipient anomalies before hard failures occur~\citep{eski2011fault, sabry2019fault,
+	shuai2022research, raouf2022mechanical}. Inverse reinforcement learning has been applied to
+	simultaneously detect anomalies and propose corrective actions in autonomous
+	systems~\citep{lian2022anomaly}, and deep-learning diagnosis has been extended to multi-fault
+	industrial robots~\citep{adam2023multiple}. Detection alone, however, does not yield an adapted
+	control policy; a separate recovery layer is still required, and these methods are unreliable when
+	failures evolve gradually with no labeled fault data available.
 
-\textbf{Reinforcement learning for fault-tolerant robots.}
-RL has emerged as a compelling framework for learning adaptive behaviors
-without explicit failure models.
-In legged locomotion, contrastive forward-prediction RL enables quadrupeds
-to detect joint damage from proprioceptive signals alone and immediately
-reconfigure gait without any fault label~\citep{fu2025contrastive}.
-Learning from observed failure trajectories has also shown promise for
-manipulation recovery~\citep{huang2025fail2progress, wang2025learning}, and
-RL has been compared favorably against model predictive control for
-fault-tolerant continuous control~\citep{ahmed2018comparison}.
-For manipulators specifically, \citet{pham2024adaptive} formulated
-joint-failure compensation as a partially observable Markov decision process
-and demonstrated high task success, but addressed only single-joint,
-simulation-only scenarios, leaving multi-fault and real-hardware settings open.
+	\textbf{Reinforcement learning for fault-tolerant robots.} RL has emerged as a compelling framework
+	for learning adaptive behaviors without explicit failure models. In legged locomotion, contrastive
+	forward-prediction RL enables quadrupeds to detect joint damage from proprioceptive signals alone and
+	immediately reconfigure gait without any fault label~\citep{fu2025contrastive}. Learning from observed
+	failure trajectories has also shown promise for manipulation recovery~\citep{huang2025fail2progress,
+	wang2025learning}, and RL has been compared favorably against model predictive control for
+	fault-tolerant continuous control~\citep{ahmed2018comparison}. For manipulators specifically,
+	\citet{pham2024adaptive} formulated joint-failure compensation as a partially observable Markov
+	decision process and demonstrated high task success, but addressed only single-joint, simulation-only
+	scenarios, leaving multi-fault and real-hardware settings open.
 
-\textbf{Teacher-student distillation and sim-to-real transfer.}
-Teacher-student RL has become the standard paradigm for deploying policies
-that must operate under partial observability at test time.
-A privileged teacher trained with full state access (e.g., exact fault
-vectors or terrain properties) is distilled into a student that operates on
-deployable observations alone~\citep{kumar2021rma}.
-Latent-space RL can further steer a pre-trained policy toward correct
-behavior with minimal additional samples~\citep{wagenmaker2025steering}, and
-active-exploration system identification during sim-to-real transfer yields
-42--63\% performance gains over standard domain
-randomization~\citep{sobanbabu2025sampling}.
-COMPENSATE applies this paradigm to manipulator fault tolerance: fault-specialized
-teacher policies are distilled into a single student that compensates for
-joint failures zero-shot on physical hardware.
+	\textbf{Teacher-student distillation and sim-to-real transfer.} Teacher-student RL has become the
+	standard paradigm for deploying policies that must operate under partial observability at test time.
+	A privileged teacher trained with full state access (e.g., exact fault vectors or terrain properties)
+	is distilled into a student that operates on deployable observations alone~\citep{kumar2021rma}.
+	Latent-space RL can further steer a pre-trained policy toward correct behavior with minimal additional
+	samples~\citep{wagenmaker2025steering}, and active-exploration system identification during sim-to-real
+	transfer yields 42--63\% performance gains over standard domain
+	randomization~\citep{sobanbabu2025sampling}. COMPENSATE applies this paradigm to manipulator fault
+	tolerance: fault-specialized teacher policies are distilled into a single student that compensates for
+	joint failures zero-shot on physical hardware.
 
 
 %===============================================================================
 
+\section{Method}
+\label{sec:method}
+
+	\textbf{COMPENSATE} is a two-phase teacher-student framework for fault-tolerant manipulator
+	control. In Phase~1, specialized teacher policies are trained via PPO on individual
+	joint-failure configurations. In Phase~2, a single student policy is distilled from the
+	teacher ensemble via behavioral cloning, without access to any explicit fault signal at
+	deployment.
+
+	\subsection{Problem Formulation}
+	\label{subsec:problem}
+
+		We model joint-failure-resilient manipulation as a Partially Observable Markov Decision
+		Process~(POMDP) $\langle\mathcal{S},\mathcal{O},\mathcal{A},T,R,\gamma\rangle$. The full
+		state $s \in \mathcal{S}$ includes joint positions, joint velocities, and the current
+		failure configuration. The policy receives only a 32-dimensional proprioceptive
+		observation $o \in \mathcal{O}$: relative joint positions $q \in \mathbb{R}^{9}$, relative
+		joint velocities $\dot{q} \in \mathbb{R}^{9}$, the previous action
+		$a_{t-1} \in \mathbb{R}^{7}$, and a goal end-effector pose $g \in \mathbb{R}^{7}$
+		(3D position and unit quaternion). No fault indicator is included in $o$; the agent must
+		infer the failure state purely from observable kinematics.
+
+		Actions $a \in \mathcal{A} \subset \mathbb{R}^{7}$ are relative joint-position increments
+		with scale $\alpha = 0.03$~rad. We consider $|\mathcal{F}|=8$ failure configurations:
+		seven single-joint permanent lockouts $\{f_0,\ldots,f_6\}$ and a healthy baseline
+		$f_\emptyset$. Under lockout $f_i$, joint $i$ holds its last commanded position regardless
+		of the network output:
+		\begin{equation}
+		    q_t^{\mathrm{cmd}, i} =
+		        \begin{cases}
+		            q_{t-1}^{\mathrm{cmd}, i} + \alpha\,a_t^i & \text{joint } i \text{ healthy,}\\
+		            q_{t-1}^{\mathrm{cmd}, i}                  & \text{joint } i \text{ locked.}
+		        \end{cases}
+		    \label{eq:action}
+		\end{equation}
+
+	\subsection{Teacher Policy Training}
+	\label{subsec:teachers}
+
+		For each configuration $c \in \mathcal{F}$, we train a specialist teacher~$\pi^c$ using
+		Proximal Policy Optimization~\citep{schulman2017proximal}. Each teacher is a two-layer MLP
+		with hidden dimensions $[128,\,64]$ and ELU activations. Training runs for $3{,}500$
+		iterations with 24 rollout steps per parallel environment, an adaptive learning rate
+		(target KL\,$=0.01$, initial $\eta = 10^{-4}$), clip ratio $\epsilon=0.2$, and entropy
+		coefficient $\beta=0.001$.
+
+		The per-step reward combines end-effector tracking and motion regularization:
+		\begin{equation}
+		    r_t = w_\mathrm{pos}\,\|p_\mathrm{ee} - p_g\|_2
+		          + w_\mathrm{fine}\,r_\mathrm{fine}(p_\mathrm{ee},\,p_g)
+		          + w_\mathrm{ori}\,r_\mathrm{ori}(\mathbf{R}_\mathrm{ee},\,\mathbf{R}_g)
+		          + w_\mathrm{reg}\,r_\mathrm{reg}(a_t,\,\dot{q}_t),
+		    \label{eq:reward}
+		\end{equation}
+		where $p_\mathrm{ee}$, $p_g$ are end-effector and goal positions,
+		$\mathbf{R}_\mathrm{ee}$, $\mathbf{R}_g$ are their rotation matrices, and
+		$r_\mathrm{fine}$ is a kernel-smoothed fine-positioning bonus. The fixed weights are
+		$w_\mathrm{pos}=-2.0$ and $w_\mathrm{ori}=-1.0$. The fine-grained weight
+		$w_\mathrm{fine}$ and action-rate and joint-velocity regularizers are each annealed from
+		zero to their target values over the first $5{,}000$ training steps, encouraging the
+		agent to first learn to reach the goal before optimizing for motion smoothness.
+
+		To ensure all commanded targets are reachable under the active joint constraints, goal
+		poses are generated by sampling random joint configurations, computing forward kinematics,
+		and discarding poses outside the reachable workspace of the locked joint.
+
+	\subsection{Fault Simulation and Curriculum}
+	\label{subsec:curriculum}
+
+		Joint failures are simulated at the action level: at each episode reset, one configuration
+		$c$ is drawn uniformly from the current curriculum set $\mathcal{C}_k \subseteq \mathcal{F}$.
+		During teacher training, an incremental curriculum initializes $\mathcal{C}_k$ with only
+		the teacher’s target failure mode and expands by one additional mode every
+		$\lfloor 1/|\mathcal{F}|\rfloor$ fraction of total training steps, so the policy first
+		masters a single failure type before encountering the full distribution. This staged
+		exposure stabilizes early-training dynamics. During student distillation~(Phase~2),
+		$\mathcal{C}_k = \mathcal{F}$ throughout with no curriculum gating, since all teachers
+		are already fully trained.
+
+	\subsection{Multi-Teacher Distillation}
+	\label{subsec:distillation}
+
+		After all teachers are trained, we distill them into a single student policy~$\pi^S$ via
+		behavioral cloning. The student is a wider MLP $[128,\,128]$ with ELU activations and
+		receives the same 32-dimensional observation as the teachers; no failure indicator is
+		present in its input.
+
+		During distillation rollouts, each parallel environment is independently assigned a random
+		configuration $c$ at reset, and the corresponding teacher~$\pi^c$ provides the behavioral
+		target for that environment. Given a minibatch
+		$\{(o_k,\,a_k^c)\}_{k=1}^{B}$, the student minimizes:
+		\begin{equation}
+		    \mathcal{L}_\mathrm{BC} =
+		        \frac{1}{B}\sum_{k=1}^{B}
+		        \bigl\|\pi^S(o_k) - a_k^c\bigr\|_2^{2}.
+		    \label{eq:bc}
+		\end{equation}
+		Training uses the Adam optimizer ($\eta = 5\times10^{-4}$), gradient accumulation over
+		15 steps, gradient clipping at norm~1.0, and 8 learning epochs per rollout. Because the
+		failure index is withheld from~$\pi^S$, the student is forced to recover a compensatory
+		strategy purely from proprioceptive dynamics, enabling generalization to failure modes not
+		encountered during teacher training.
+
+	\subsection{Simulation Environments and Sim-to-Real Transfer}
+	\label{subsec:sim2real}
+
+		All policies are trained in \textbf{IsaacLab} on a Franka Research~3~(FR3) model. The
+		reach task commands random end-effector poses resampled every 6~s, with success defined
+		as reaching within 0.04~m position error and 0.2~rad orientation error. Additive uniform
+		observation noise ($\pm 0.01$~rad) is applied to joint positions, velocities, and action
+		feedback at every step to encourage robustness.
+
+		Cross-simulator validation is performed in \textbf{mjlab}~(MuJoCo~Warp), which mirrors
+		the IsaacLab observation and action specification at a matched 30~Hz control rate
+		(240~Hz physics, decimation~8). Checkpoints trained in IsaacLab transfer to mjlab
+		without fine-tuning, confirming that learned compensation behaviors are not artifacts of
+		the Isaac~Sim physics engine. Zero-shot deployment on a physical Franka Research~3 arm
+		completes the sim-to-real evaluation.
 
 
 
-\section{Citations}
-\label{sec:citations}
+\section{Experiments -- 1-2 Pages}
+\subsection{Implementation Details}
+We conducted our simulation experiments using IsaacLab, which offers high-fidelity physics simulation for accurate modeling of robot manipulators and their interactions with the environment. 
+Within this environment, we trained both teacher and student policies from scratch using proximal policy optimization (PPO). The training process incorporated task-specific reward functions as well as curricula designed to progressively increase task difficulty, ensuring that the learned policies were both robust and adaptable.
 
-	Citations can be made using either \textbackslash citep\{\} or \textbackslash citet\{\}, depending from the appropriateness. To avoid the citation moving to the next line, it is often a good practice to replace the space before with a tilde (\~{}) character.
-	Example 1: ``CoRL is the best conference ever~\citep{Gauss1857}.''
-	Example 2: ``\citet{Lagrange1788} proved, both theoretically and numerically, that CoRL is the best conference ever.''
-	
+Following policy training in IsaacLab, we performed cross-simulator evaluation using mjlab. This sim-to-sim transfer step allowed us to examine how the trained policies generalize under different physics engines. Since MuJoCo employs dynamics models that differ from those in IsaacLab, successful performance across both platforms indicates that the policies would transfer   to real hardware. Finally, we validated our approach in hardware on two separate manipulators, the Franka Research 3 (FR3) and the Franka Emika Panda. These real-world trials facilitated a comprehensive assessment of zero-shot policy deployment across both simulation and physical domains.
+
+\subsection{Tasks and Evaluation Protocol}
+
+To evaluate the COMPENSATE framework, we defined a suite of manipulation tasks designed to capture core operational capabilities and resilience under failure conditions. Specifically, we considered four representative tasks: Reach, Spline, Lift, and Stack. Collectively, these tasks span the essential skill set of articulated manipulators, from precise target acquisition to trajectory execution, object lifting, and sequential object placement.
+
+To investigate fault tolerance, we introduced two distinct classes of simulated joint malfunctions. The first was a permanent joint failure, modeled by constraining the affected joint to its last commanded position and enforcing zero velocity, thereby emulating a joint that ceases operation entirely. The second was a degraded performance fault, implemented by artificially increasing joint stiffness, resulting in diminished accuracy and compliance while preserving partial operability. These failure models were injected during task execution, forcing the learned policies to adapt dynamically to unexpected hardware limitations.
+
+The trained policies were evaluated under both seen tasks, which were included during training, and unseen tasks, which were held out to assess generalization. This dual evaluation protocol enabled us to systematically investigate the robustness and adaptability of the learned control strategies when confronted with novel scenarios beyond their training distribution. For all tasks, the primary evaluation criteria consisted of task completion rate and completion time, both of which serve as direct indicators of efficiency and reliability. In addition, for the Spline task, we incorporated a trajectory-tracking metric to quantify positional accuracy with respect to the reference path. This allowed us to capture not only binary success or failure but also the degree of precision in executing continuous, dynamically constrained movements.
+
+\subsection{Results}
+
+To benchmark the proposed method, we compared its performance against several baselines: a standard PPO policy trained without joint failures, a diffusion policy, and an inverse kinematics (IK)-based controller. Following the training of the teacher policies, we generated datasets encompassing all modeled joint failure scenarios and subsequently distilled this data into a diffusion policy, thereby providing a generative baseline for fault adaptation. In addition, we developed a fault-tolerant IK system in which the index and position of the failed joint were explicitly provided to the kinematics solver. This allowed the solver to reconfigure the manipulator and compute feasible joint configurations under constrained degrees of freedom, serving as a classical control baseline for handling hardware faults.
+
+
 %===============================================================================
 
 \section{Experimental Results}
