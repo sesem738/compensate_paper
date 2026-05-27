@@ -1,0 +1,16 @@
+Joint_failure_type,Joint_number,Min err mean,Min err std,Min err best,Success,Percentage
+Complete,0,0.033,0.0118,0.0035,50,100
+Complete,1,0.0442,0.0262,0.0035,37,74
+Complete,2,0.0341,0.0107,0.0074,49,98
+Complete,3,0.0359,0.0172,0.0037,44,88
+Complete,4,0.043,0.0192,0.0133,50,100
+Complete,5,0.0375,0.0224,0.0015,43,86
+Complete,6,0.0395,0.024,0.0038,40,80
+Complete,7,0.037,0.025,0.0006,47,94
+
+
+Algo,Joint_number,Min err mean,Min err std,Min err best,Success,Percentage
+Distilation,All ,0.053,0.026,0.0154,28,56
+Distilation,All ,0.048,0.0346,0.0046,37,74
+Diffusion,All ,0.1186,0.1042,0.05,16,32
+Diffusion,All ,0.0814,0.042,0.05,33,66
