@@ -59,21 +59,26 @@
 %===============================================================================
 
 \begin{abstract}
-	Robotic manipulators in safety-critical settings are vulnerable to silent joint failures that
-	abruptly degrade performance, yet classical fault-tolerant strategies depend on accurate dynamic
-	models or hand-crafted recovery rules that presuppose an explicit fault signal. We present
-	\textbf{COMPENSATE}, a teacher-student reinforcement learning framework for fault-tolerant
-	manipulation built on three coupled choices: a \emph{privileged teacher ensemble} with one PPO
-	specialist per failure mode, a \emph{fault-blind student} distilled by hard per-environment
-	teacher routing so that the active fault must be inferred from proprioception alone, and a
-	\emph{staged fault curriculum} paired with cross-simulator validation in mjlab that filters out
-	engine-specific artifacts before any hardware trial. On a Franka Research~3 reach task under
-	per-joint permanent lockouts, the privileged teachers attain 90.0\% mean success at 0.038~m
-	end-effector error, and the fault-blind student retains 65.0\% success at 0.051~m, outperforming
-	a diffusion policy trained on the same teacher-generated data by 16 percentage points
-	and roughly half the residual position error. The 25-point teacher-to-student gap quantifies
-	the cost of withholding the fault indicator and supports the central design choice of decoupling
-	training-time privilege from deployment-time observability.
+	Robotic manipulators in safety-critical deployments are susceptible to joint failures that
+	cause abrupt performance degradation, yet classical fault-tolerant control relies on analytical
+	models of the post-fault dynamics and hand-engineered recovery laws that do not generalise
+	across the fault-mode distribution. We present \textbf{COMPENSATE}, a teacher-student
+	reinforcement learning framework for fault-tolerant manipulation comprising three components:
+	a \emph{privileged teacher ensemble} of mode-specialised PPO policies, one per failure
+	configuration; a \emph{fault-conditioned student} that consumes a one-hot fault indicator
+	concatenated with the proprioceptive observation and is supervised by behavioural cloning under
+	hard per-environment teacher routing; and a \emph{staged fault curriculum} during teacher
+	optimisation, coupled with zero-shot cross-simulator evaluation in mjlab that rejects policies
+	exploiting simulator-specific contact integration prior to hardware deployment. On a Franka
+	Research~3 reach task under per-joint permanent lockouts, the privileged teachers attain
+	$89.4\%$ mean success at a $0.038$~m mean end-effector position error on the seven
+	single-joint lockouts, and the fault-conditioned
+	student retains $65.0\%$ success at $0.051$~m, exceeding a diffusion policy distilled from the
+	same supervision and fault conditioning by $16$ percentage points of success while halving the
+	residual position error. The $\approx\!24$-point teacher-to-student deficit quantifies the
+	behavioural-cloning loss incurred when the per-mode specialist ensemble is compressed into a
+	single fault-conditioned network and substantiates the architectural decomposition that
+	separates mode-specific policy optimisation from unified, conditioning-driven deployment.
 \end{abstract}
 
 % Two or three meaningful keywords should be added here
@@ -110,9 +115,10 @@
 	(including recovery in long-horizon manipulation tasks)~\citep{huang2025fail2progress}.
 	Generative approaches such as counterfactual failure synthesis can further produce diverse fault
 	rollouts from successful demonstrations, reaching 81.3\% correction accuracy~\citep{wang2025learning}.
-	Nevertheless, these methods presuppose either a corpus of failure demonstrations or an explicit
-	fault-detection signal as input. When a joint degrades silently mid-task and no labeled failure data
-	are available, they cannot generate an online, adaptive control response.
+	Nevertheless, these methods presuppose either a corpus of failure demonstrations or a
+	hand-crafted recovery policy downstream of detection. Even when a fault has been correctly
+	identified, the question of \emph{what to do next} is left to a separate model-based controller
+	whose recovery behaviour does not scale across the diversity of possible faults.
 
 	The robotics community has increasingly turned to reinforcement learning~(RL) to overcome this
 	limitation. For legged locomotion, contrastive forward-prediction RL enables agents to detect joint
@@ -132,11 +138,13 @@
         \label{fig:COMPENSATE}
     \end{figure}
 	To address this gap, we present \textbf{COMPENSATE}, a teacher-student RL
-	framework for fault-tolerant manipulator control. The framework rests on three coupled choices:
+	framework for fault-tolerant manipulator control. The framework is composed of three
+	interdependent components:
 	\emph{(i)}~A \emph{privileged teacher ensemble} in which one proximal policy optimization (PPO) specialist is trained for each failure mode, such that mode-specific compensations are not averaged away by a single multi-task
-	agent. \emph{(ii)}~A \emph{fault-blind student} distilled by hard per-environment teacher
-	routing, with no fault indicator in its observation, so that the active fault must be inferred
-	from proprioception alone, matching what is available on hardware. \emph{(iii)}~A \emph{staged
+	agent. \emph{(ii)}~A \emph{fault-aware student} distilled by hard per-environment teacher
+	routing: the student receives an explicit fault indicator alongside the proprioceptive
+	observation and is supervised at each environment by the matching specialist, so that a single
+	deployable network carries the full per-mode behaviour repertoire of the ensemble. \emph{(iii)}~A \emph{staged
 	fault curriculum} for the teachers, paired with cross-simulator validation in mjlab that acts as
 	an inexpensive sim-to-real probe filtering out engine-specific artifacts before any physical
 	trial. We instantiate the framework on a Franka Research~3 model and report a preliminary
@@ -178,16 +186,19 @@
 	scenarios, leaving multi-fault and real-hardware settings open.
 
 	\textbf{Teacher-student distillation and sim-to-real transfer.} Teacher-student RL has become the
-	standard paradigm for deploying policies that must operate under partial observability at test time.
-	A privileged teacher trained with full state access (e.g., exact fault vectors or terrain properties)
-	is distilled into a student that operates on deployable observations alone~\citep{kumar2021rma}.
-	Latent-space RL can further steer a pre-trained policy toward correct behavior with minimal additional
-	samples~\citep{wagenmaker2025steering}, and active-exploration system identification during sim-to-real
-	transfer yields 42\%-63\% performance gains over standard domain
-	randomization~\citep{sobanbabu2025sampling}. COMPENSATE applies this paradigm to manipulator fault
-	tolerance: fault-specialized teacher policies are distilled into a single student that compensates for
-	joint failures zero-shot on physical hardware. The next section formalizes this setting as a
-	Partially Observable Markov 		Decision Process~(POMDP) and develops the three components in turn.
+	standard paradigm for deploying policies whose training-time supervision is richer than the
+	signal available at test time. A privileged teacher trained with full state access (e.g., exact
+	terrain or contact properties) is distilled into a student that operates on deployable
+	observations alone~\citep{kumar2021rma}. Latent-space RL can further steer a pre-trained policy
+	toward correct behavior with minimal additional samples~\citep{wagenmaker2025steering}, and
+	active-exploration system identification during sim-to-real transfer yields 42\%-63\%
+	performance gains over standard domain randomization~\citep{sobanbabu2025sampling}.
+	COMPENSATE adapts this paradigm to manipulator fault tolerance with a different decomposition:
+	rather than distilling one privileged teacher into a partially-observed student, we train an
+	\emph{ensemble} of per-mode PPO specialists and distill them into a single fault-conditioned
+	student, so the privilege removed at deployment is the redundancy of running multiple per-mode
+	networks, not knowledge of the fault itself. The next section formalises this setting as a
+	Partially Observable Markov Decision Process~(POMDP) and develops the three components in turn.
 
 
 %===============================================================================
@@ -195,17 +206,17 @@
 \section{Method}
 \label{sec:method}
 
-	The deployment setting we target has a sharp informational asymmetry: at training time we can
-	choose what an agent observes, but at test time the arm provides only proprioception and the
-	commanded action. Any method that relies on a fault label at deployment presupposes the very
-	fault-detection module we wish to avoid. \textbf{COMPENSATE} therefore separates training-time
-	privilege from deployment-time observability through three coupled components: a
-	\emph{privileged teacher ensemble} (\S\ref{subsec:teachers}) that converges to mode-specific
-	compensations rather than an averaged behavior, a \emph{staged fault curriculum}
-	(\S\ref{subsec:curriculum}) that keeps PPO stable as the fault set widens, and a
-	\emph{fault-blind student} (\S\ref{subsec:distillation}) distilled by hard per-environment
-	teacher routing so that compensation is inferred from kinematic history alone. We first
-	formalise the setting.
+	A single PPO agent confronted with the full distribution of fault modes receives gradient
+	signals from qualitatively different optimal compensations and converges to an averaged,
+	often infeasible, behaviour. \textbf{COMPENSATE} avoids this multi-task interference by
+	decomposing learning into two stages: per-mode PPO specialists are trained in isolation, then
+	their behaviours are compressed into a single fault-conditioned deployable network. Three
+	components implement this split: a \emph{privileged teacher ensemble}
+	(\S\ref{subsec:teachers}) that converges to mode-specific compensations, a \emph{staged fault
+	curriculum} (\S\ref{subsec:curriculum}) that keeps each PPO specialist stable as its active
+	fault set widens, and a \emph{fault-aware student} (\S\ref{subsec:distillation}) that receives
+	an explicit fault indicator at deployment and is supervised by hard per-environment teacher
+	routing. We first formalise the setting.
 
 	\subsection{Problem Formulation}
 	\label{subsec:problem}
@@ -213,12 +224,15 @@
 		We model joint-failure-resilient manipulation as a POMDP
 		$\langle\mathcal{S},\mathcal{O},\mathcal{A},T,R,\gamma\rangle$. The full state
 		$s\in\mathcal{S}$ contains the joint positions $q\in \mathbb{R}^n$, joint velocities $\dot q$, and the
-		currently active failure configuration, but the policy never observes the
-		failure component: $o\in\mathcal{O}$ is restricted to relative joint positions, relative joint velocities, the previous action $a_{t-1}$, and the
-		goal end-effector pose $g$ (3D position and unit quaternion). This deliberate
-		partial observability is the methodological core of the work: it forces the
-		agent to recover the latent failure state from observable kinematics, mirroring
-		the information available on a real arm whose joint has silently degraded.
+		currently active failure configuration. The student's observation
+		$o\in\mathcal{O}$ comprises relative joint positions, relative joint velocities, the previous
+		action $a_{t-1}$, the goal end-effector pose $g=(p_g,\mathbf{q}_g)$ with position
+		$p_g\in\mathbb{R}^{3}$ and unit quaternion $\mathbf{q}_g\in\mathbb{S}^{3}$, and an
+		explicit fault indicator $f\in\mathcal{F}$ encoded as a one-hot vector over the failure
+		set. The teachers see the same observation but their fault indicator is, by construction,
+		constant within each training run (each teacher is trained against a single mode). The
+		shared fault-aware observation is what allows the per-mode specialists to be compressed
+		into a single deployable network at distillation time.
 
 		Actions $a\in\mathcal{A}\subset \mathbb{R}^n$ are relative joint-position increments scaled by
 		$\alpha\in \mathbb{R}_{>0}$. We consider a set $\mathcal{F}=\{f_1 \ldots f_n\}$ of failure configurations comprising
@@ -253,21 +267,32 @@
 		that has implicit knowledge of its own fault through the environment it was
 		exposed to during training.
 
-		Each teacher optimizes a reward that combines end-effector tracking with motion
-		regularization,
+		Each teacher optimises a weighted sum of an end-effector tracking objective and motion
+		regularisers. Let $p_\mathrm{ee}\in\mathbb{R}^{3}$ and $\mathbf{q}_\mathrm{ee}\in\mathbb{S}^{3}$
+		denote the current end-effector position and unit-quaternion orientation, and let $p_g$,
+		$\mathbf{q}_g$ be the goal pose components from \S\ref{subsec:problem}. With
+		$a_t\in\mathbb{R}^{7}$ the commanded action and $\dot q_t\in\mathbb{R}^{9}$ the measured
+		joint velocity, the teacher reward at step $t$ is
 		\begin{equation}
-		    r_t = w_\mathrm{pos}\,\|p_\mathrm{ee} - p_g\|_2
-		          + w_\mathrm{fine}\,r_\mathrm{fine}(p_\mathrm{ee},\,p_g)
-		          + w_\mathrm{ori}\,r_\mathrm{ori}(\mathbf{R}_\mathrm{ee},\,\mathbf{R}_g)
-		          + w_\mathrm{reg}\,r_\mathrm{reg}(a_t,\,\dot{q}_t),
+		    \begin{aligned}
+		        r_t = \;&w_\mathrm{pos}\,\|p_\mathrm{ee}-p_g\|_2
+		            + w_\mathrm{fine}\bigl(1-\tanh(\|p_\mathrm{ee}-p_g\|_2/\sigma)\bigr) \\
+		            &+ w_\mathrm{ori}\cdot 2\arccos\!\bigl(|\langle\mathbf{q}_\mathrm{ee},\mathbf{q}_g\rangle|\bigr)
+		            + w_\mathrm{ar}\,\|a_t-a_{t-1}\|_2^{2}
+		            + w_\mathrm{jv}\,\|\dot q_t\|_2^{2},
+		    \end{aligned}
 		    \label{eq:reward}
 		\end{equation}
-		where $r_\mathrm{fine}$ is a kernel-smoothed fine-positioning bonus and
-		$r_\mathrm{reg}$ penalizes action rate and joint velocity. The fine-grained and
-		regularization weights are annealed from zero so that the agent first learns to
-		\emph{reach} under the active fault before being asked to do so \emph{smoothly}. 
+		where the five terms are, in order, an $L_2$ coarse-position penalty (m), a tanh-kernel
+		fine-positioning term with bandwidth $\sigma=0.1$~m, the geodesic orientation error in
+		radians, an $L_2$ action-rate penalty, and an $L_2$ joint-velocity penalty. The weights
+		$\{w_\mathrm{pos}, w_\mathrm{fine}, w_\mathrm{ar}, w_\mathrm{jv}\}$ follow the linear
+		curriculum specified in \S\ref{subsec:impl} (sign-flipping $w_\mathrm{fine}$ from an early
+		penalty into a late-training bonus), while $w_\mathrm{ori}$ is held constant. The schedule
+		enforces that the agent first learns to \emph{reach} under the active fault before being
+		asked to do so \emph{smoothly}.
 		Without this annealing, we observed teachers collapsing to a still posture that
-		trivially satisfies the regularizer. Goal poses are sampled by drawing random
+		trivially satisfies the regulariser. Goal poses are sampled by drawing random
 		joint configurations, computing forward kinematics, and rejecting any pose
 		outside the reachable workspace of the locked joint, so the reward signal is
 		never dominated by physically unreachable targets, an effect that would
@@ -291,53 +316,56 @@
 		curriculum.  By the time distillation begins, all teachers are fixed, so
 		uniform sampling over $\mathcal{F}$ poses no instability.
 
-	\subsection{Fault-Blind Student Distillation}
+	\subsection{Fault-Aware Student Distillation}
 	\label{subsec:distillation}
 
-		The student~$\pi^S$ is the policy that will actually be deployed. To match
-		hardware conditions, it receives the same proprioceptive observation as the
-		teachers but \emph{no fault index}; the failure mode is a latent variable that
-		the student must infer from kinematic history. This is what distinguishes
-		COMPENSATE from prior teacher--student work that includes the privileged
-		variable as a learned embedding~\citep{kumar2021rma}.  We make the absence of
-		the fault signal a deployment requirement, not a regularization trick, because
-		any fault label at deployment time would presuppose the very FDI module our
-		method is designed to replace.
+		The student~$\pi^S$ is the policy that will actually be deployed. It receives the same
+		observation as the teachers, including the one-hot fault indicator
+		$f\in\mathcal{F}$, so its job is not to detect the active fault but to compress the
+		per-mode specialists $\{\pi^c\}_{c\in\mathcal{F}}$ into a single conditional network
+		$\pi^S(\cdot\mid o, f)$. We adopt this design rather than the alternative of inferring
+		the fault from kinematic history because (i) collapsing the ensemble into one
+		fault-conditioned network removes the per-mode selection step that would otherwise be
+		required at deployment, and (ii) inference quality and control quality decouple, so the
+		student's residual error is attributable to behaviour cloning and capacity, not to latent
+		fault disambiguation. An upstream fault-detection module is assumed to supply $f$ at
+		deployment time; replacing that module with a learned detector is left to future work.
 
-		At each distillation reset, every parallel environment is independently
-		assigned a configuration $c$ and routed to the corresponding teacher~$\pi^c$.
-		That teacher provides the behavioral target for that environment for the
-		entire episode. We use this \emph{hard routing} rather than averaging
-		teacher logits because the teachers represent mode-specific compensations that
-		are non-interpolable, so averaging would supervise the student with actions no
-		single teacher would take. Given minibatches $\{(o_k,\,a_k^c)\}_{k=1}^{B}$, the
-		student minimizes the per-action behavioral-cloning loss
+		At each distillation reset, every parallel environment is independently assigned a
+		configuration $c$ and routed to the corresponding teacher~$\pi^c$. That teacher provides
+		the behavioural target for that environment for the entire episode, and the student is
+		conditioned on $f = \text{one\_hot}(c)$. We use this \emph{hard routing} rather than
+		averaging teacher logits because the teachers represent mode-specific compensations that
+		are non-interpolable, so averaging would supervise the student with actions no single
+		teacher would take. Given minibatches $\{(o_k, f_k, a_k^c)\}_{k=1}^{B}$, the student
+		minimizes the per-action behavioural-cloning loss
 		\begin{equation}
 		    \mathcal{L}_\mathrm{BC} =
 		        \frac{1}{B}\sum_{k=1}^{B}
-		        \bigl\|\pi^S(o_k) - a_k^c\bigr\|_2^{2}.
+		        \bigl\|\pi^S(o_k, f_k) - a_k^c\bigr\|_2^{2}.
 		    \label{eq:bc}
 		\end{equation}
-		Because the student must reproduce all teachers from a fault-blind observation,
-		convergence of~$\mathcal{L}_\mathrm{BC}$ is itself evidence that the
-		compensation strategies are identifiable from proprioception, which in turn
-		predicts that the student will generalize to fault modes that lie between
-		those represented in $\mathcal{F}$. We now describe how these components are
-		instantiated and evaluated.
+		Convergence of~$\mathcal{L}_\mathrm{BC}$ certifies that the per-mode behaviours of the
+		ensemble fit into a single network indexed by $f$; the remaining gap to the per-mode PPO
+		performance bound is then a direct measure of distillation loss. We now describe how
+		these components are instantiated and evaluated.
 
 \section{Experiments}
 \subsection{Implementation Details}
+\label{subsec:impl}
 
 		All policies are trained in \textbf{IsaacLab} on a Franka Research~3 (FR3)
 		model, then evaluated through a deliberate three-stage pipeline (IsaacLab,
 		mjlab, and physical hardware), each stage acting as a stricter filter on the
-		preceding one. The policy observation is 32-dimensional: relative joint
+		preceding one. The policy observation is 40-dimensional: relative joint
 		positions $q\in\mathbb{R}^{9}$, relative joint velocities
-		$\dot q\in\mathbb{R}^{9}$, the previous action $a_{t-1}\in\mathbb{R}^{7}$, and
-		a goal end-effector pose $g\in\mathbb{R}^{7}$. Actions are relative
+		$\dot q\in\mathbb{R}^{9}$, the previous action $a_{t-1}\in\mathbb{R}^{7}$,
+		a goal end-effector pose $g\in\mathbb{R}^{3}\times\mathbb{S}^{3}$, and a one-hot fault indicator
+		$f\in\{0,1\}^{8}$ identifying the active configuration in $\mathcal{F}$.
+		Actions are relative
 		joint-position increments with scale $\alpha=0.03$~rad. The teacher set
-		$\mathcal{F}$ contains $|\mathcal{F}|=8$ single-joint permanent lockout
-		configurations across the actuated degrees of freedom of the FR3 model.
+		$\mathcal{F}$ contains $|\mathcal{F}|=8$ configurations: seven single-joint
+		permanent lockouts (one per actuated FR3 joint) and a healthy baseline.
 		The reach task resamples random 	end-effector goals every 6~s with success defined as $\le 0.04$~m position
 		error and $\le 0.2$~rad orientation error.  Additive uniform observation noise
 		of $\pm 0.01$~rad is injected on joint positions, velocities, and action
@@ -347,11 +375,15 @@
 		with hidden dimensions $[128,\,64]$ and ELU activations, trained with PPO for
 		$3{,}500$ iterations using 24 rollout steps per parallel environment, an
 		adaptive learning rate (target KL $=0.01$, initial $\eta=10^{-4}$), clip ratio
-		$\epsilon=0.2$, and entropy coefficient $\beta=0.001$. Reward weights are
-		$w_\mathrm{pos}=-2.0$ and $w_\mathrm{ori}=-1.0$, with the fine-grained and
-		regularization weights annealed from zero over the first $5{,}000$ steps. The
-		fault curriculum expands $\mathcal{C}_k$ by one additional mode every
-		$\lfloor 1/|\mathcal{F}|\rfloor$ fraction of training. The student is a wider
+		$\epsilon=0.2$, and entropy coefficient $\beta=0.001$. Reward weights follow a linear
+		curriculum over the first $5{,}000$ environment steps: $w_\mathrm{pos}$ is ramped from
+		$-2.0$ to $-1.0$, $w_\mathrm{fine}$ from $-0.05$ to $+1.0$ (sign-flipping the tanh-kernel
+		term from an early-training penalty into a late-training bonus once the agent reaches the
+		coarse goal), $w_\mathrm{ar}$ from $0$ to $-0.01$, and $w_\mathrm{jv}$ from $0$ to
+		$-0.001$, while $w_\mathrm{ori}$ is held at $-1.0$ throughout. The fault-mode curriculum
+		expands $\mathcal{C}_k$ by one additional mode at each evenly-spaced fraction
+		$i/|\mathcal{F}|$ of the total training step budget ($i=1,\ldots,|\mathcal{F}|$),
+		implemented as a counter on \texttt{env.common\_step\_counter}. The student is a wider
 		MLP $[128,\,128]$ with ELU activations, trained on the BC loss in
 		Eq.~\ref{eq:bc} using Adam ($\eta=5\times 10^{-4}$), gradient accumulation
 		over 15 steps, gradient clipping at norm~1.0, and 8 learning epochs per
@@ -373,11 +405,11 @@
 
 \subsection{Tasks and Evaluation Protocol}
 
-The full COMPENSATE evaluation protocol spans four manipulation tasks (Reach, Spline, Lift, Stack), two classes of simulated joint fault (permanent lockout and degraded stiffness via artificially increased joint stiffness), and a sim-to-hardware pipeline that culminates in zero-shot deployment on the FR3 and Panda arms. Reach is the precise target-acquisition task and is the focus of the present manuscript; Spline, Lift, and Stack extend the protocol to trajectory tracking, object lifting, and sequential placement, and are evaluated in the same way once the corresponding teacher specialists have been trained. The primary metric is task completion rate, with completion time and (for Spline) a trajectory-tracking error reported as secondary metrics. Permanent lockouts constrain the affected joint to its last commanded position with zero velocity; degraded-stiffness faults preserve partial operability but inject diminished accuracy and compliance. Reported results below cover the Reach task under per-joint permanent lockouts; the remaining task-by-fault cells are left to subsequent reports.
+The COMPENSATE evaluation protocol covers two manipulation tasks (Reach and Lift), two classes of simulated joint fault (permanent lockout and degraded stiffness via artificially increased joint stiffness), and a sim-to-hardware pipeline that culminates in zero-shot deployment on the FR3 and Panda arms. Reach is the precise target-acquisition task and is the focus of the present manuscript; Lift extends the protocol to object lifting and is evaluated in the same way once the corresponding teacher specialists have been trained. The primary metric is task completion rate, with completion time reported as a secondary metric. Permanent lockouts constrain the affected joint to its last commanded position with zero velocity; degraded-stiffness faults preserve partial operability but inject diminished accuracy and compliance. Reported results below cover the Reach task under per-joint permanent lockouts; Lift results are reported in the appendix.
 
 \subsection{Baselines}
 
-To benchmark the proposed method, we compare it against three baselines: a standard PPO policy trained without joint failures, a diffusion policy, and an inverse kinematics (IK) controller. The diffusion baseline is trained by rolling out the teacher specialists across all modelled joint-failure scenarios, aggregating the resulting transitions into a single dataset, and distilling that dataset into a diffusion policy; this provides a generative learning baseline that sees the same supervisory signal as COMPENSATE but lacks the per-environment teacher routing. The IK baseline is given an unfair advantage: the index and frozen position of the failed joint are passed directly to the solver, which then reconfigures the manipulator over the remaining degrees of freedom. This baseline represents an oracle classical-control variant in which fault detection is assumed solved, and serves as an upper-bound reference for what a fault-aware analytical controller can achieve.
+To benchmark the proposed method, we compare it against two baselines: a standard PPO policy trained without joint failures, and a diffusion policy. The diffusion baseline is trained by rolling out the teacher specialists across all modelled joint-failure scenarios, aggregating the resulting transitions into a single dataset, and distilling that dataset into a diffusion policy conditioned on the same observation as COMPENSATE, including the fault indicator; this isolates the effect of generative-aggregation distillation versus the per-environment discriminative routing used by COMPENSATE.
 
 
 %===============================================================================
@@ -386,15 +418,16 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 \label{sec:result}
 
 	On the Franka Research~3 Reach task under per-joint permanent lockouts, the privileged
-	specialist teachers attain a mean success rate of \textbf{90.0\%} at \textbf{0.038~m} mean
-	end-effector error, and the fault-blind COMPENSATE student retains \textbf{65.0\%} success at
+	specialist teachers attain a lockout-mean success rate of \textbf{89.4\%} at \textbf{0.038~m} mean
+	end-effector error (with the healthy-baseline specialist at 94\%/0.037~m reported separately), and the fault-aware COMPENSATE student retains \textbf{65.0\%} success at
 	\textbf{0.051~m}, outperforming a diffusion policy trained on the same teacher-generated data
 	by \textbf{16 percentage points} of success and approximately halving its residual position
 	error. The remainder of this section unpacks this headline through three questions, all
 	evaluated on the \textbf{Reach} task. \emph{(Q1)} Can a specialist teacher recover end-effector
 	reaching under a permanent single-joint lockout, and how does difficulty vary
-	with the locked joint? \emph{(Q2)} Does the fault-blind student preserve the
-	teachers' compensation strategies when the fault indicator is withheld?
+	with the locked joint? \emph{(Q2)} Can a single fault-conditioned student
+	reproduce the per-mode teacher behaviours from one network when supervised by
+	hard per-environment routing?
 	\emph{(Q3)} How does the student compare to a generative learning baseline
 	trained on the same teacher data? Unless stated otherwise, all numbers are
 	computed from 50 Reach episodes per (method, condition) cell using the
@@ -402,8 +435,8 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 	within the 6~s episode budget); we also report the minimum end-effector
 	position error attained within each episode (mean, standard deviation, and
 	best across the 50 trials) as a continuous proxy for compensation quality.
-	Results on the Spline, Lift, and Stack tasks, on degraded-stiffness and
-	multi-joint faults, and on the PPO-without-failures and IK baselines, follow
+	Results on the Lift task, on degraded-stiffness and
+	multi-joint faults, and on the PPO-without-failures baseline, follow
 	the same protocol and are reported in the appendix and in the
 	hardware-deployment section.
 
@@ -411,11 +444,14 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 	\label{subsec:results-teacher}
 
 		Table~\ref{tab:teacher-per-joint} reports each specialist teacher evaluated
-		under its own target lockout. Across the eight failure configurations the
-		teachers reach a mean success rate of \textbf{90.0\%} and a mean minimum
+		under its own target lockout. Across the seven single-joint lockout configurations the
+		teachers reach a mean success rate of \textbf{89.4\%} and a mean minimum
 		position error of \textbf{0.038~m}, indicating that even with one full
 		degree of freedom frozen the residual six-DoF chain is consistently driven
-		to within the success tolerance of the unimpaired goal. The two strongest
+		to within the success tolerance of the unimpaired goal. The healthy-baseline
+		specialist (column ``7 (healthy)'' in Table~\ref{tab:teacher-per-joint}) attains
+		94\% success at 0.037~m, providing a non-fault ceiling against which the lockout
+		means can be read. The two strongest
 		conditions are joints~0 and~4 (both 100\% success), which lie at the
 		extremes of the kinematic chain and whose loss can be absorbed by the
 		remaining redundancy with only a local re-aiming of adjacent joints. The
@@ -430,20 +466,21 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 		\begin{table}[t]
 		\centering
 		\small
-		\caption{\textbf{Per-joint teachers recover 90.0\% mean success on the Reach task under a
-		permanent single-joint lockout, with the hardest cases at joints whose loss removes a
-		primary reach or wrist orientation degree of freedom.} Success is the fraction of 50 Reach
+		\caption{\textbf{Per-joint teachers recover 89.4\% mean success across the seven
+		single-joint permanent lockouts; the joint~7 column reports the healthy-baseline
+		specialist (no fault) as a non-fault reference.} Success is the fraction of 50 Reach
 		episodes that end within 0.04~m of the goal; min err is the minimum end-effector position
-		error attained within each episode.}
+		error attained within each episode. The ``Mean (0--6)'' column aggregates the lockout
+		configurations only and excludes the healthy baseline.}
 		\label{tab:teacher-per-joint}
 		\begin{tabular}{lcccccccc c}
 		\toprule
-		Joint & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & Mean \\
+		Joint & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 (healthy) & Mean (0--6) \\
 		\midrule
-		Success (\%)            & 100  & 74   & 98   & 88   & 100  & 86   & 80   & 94   & \textbf{90.0} \\
+		Success (\%)            & 100  & 74   & 98   & 88   & 100  & 86   & 80   & 94   & \textbf{89.4} \\
 		Min err mean (m)        & 0.033 & 0.044 & 0.034 & 0.036 & 0.043 & 0.038 & 0.040 & 0.037 & \textbf{0.038} \\
-		Min err std (m)         & 0.012 & 0.026 & 0.011 & 0.017 & 0.019 & 0.022 & 0.024 & 0.025 & 0.020 \\
-		Min err best (m)        & 0.004 & 0.004 & 0.007 & 0.004 & 0.013 & 0.002 & 0.004 & 0.001 & 0.005 \\
+		Min err std (m)         & 0.012 & 0.026 & 0.011 & 0.017 & 0.019 & 0.022 & 0.024 & 0.025 & 0.019 \\
+		Min err best (m)        & 0.004 & 0.004 & 0.007 & 0.004 & 0.013 & 0.002 & 0.004 & 0.001 & 0.002 \\
 		\bottomrule
 		\end{tabular}
 		\end{table}
@@ -451,7 +488,7 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 	\subsection{Distilled Student vs. Diffusion Baseline}
 	\label{subsec:results-student}
 
-		Table~\ref{tab:agg} compares the fault-blind COMPENSATE student against the
+		Table~\ref{tab:agg} compares the fault-aware COMPENSATE student against the
 		diffusion baseline aggregated across the full joint-failure distribution.
 		We report two independent training seeds per method to expose run-to-run
 		variability. Averaged over seeds, COMPENSATE attains \textbf{65.0\%} success
@@ -469,17 +506,18 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 		\begin{table}[t]
 		\centering
 		\small
-		\caption{\textbf{The fault-blind COMPENSATE student retains 65.0\% success on Reach across
-		all eight lockout configurations, outperforming a diffusion baseline trained on the same
-		teacher data by 16 points and halving its residual position error.} Two independent seeds
-		per learned method; the teacher row reports the per-joint mean from
+		\caption{\textbf{The fault-aware COMPENSATE student retains 65.0\% success on Reach across
+		the full deployment distribution (seven permanent lockouts and a healthy baseline),
+		outperforming a diffusion baseline trained on the same teacher data and fault conditioning
+		by 16 points and halving its residual position error.}
+		Two independent seeds per learned method; the teacher row reports the per-joint mean from
 		Table~\ref{tab:teacher-per-joint} as an oracle upper bound.}
 		\label{tab:agg}
 		\begin{tabular}{lccc}
 		\toprule
 		Method & Success (\%) & Min err mean (m) & Min err std (m) \\
 		\midrule
-		Specialist teachers (oracle, per-joint mean) & 90.0          & 0.038         & 0.020 \\
+		Specialist teachers (oracle, lockout mean over joints 0--6) & 89.4          & 0.038         & 0.019 \\
 		\midrule
 		COMPENSATE (student), seed 1                 & 56            & 0.053         & 0.026 \\
 		COMPENSATE (student), seed 2                 & 74            & 0.048         & 0.035 \\
@@ -495,24 +533,70 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 	\subsection{Discussion}
 	\label{subsec:results-discussion}
 
-		The gap between the privileged teacher ensemble (90\%) and the fault-blind
-		student (65\%) quantifies the cost of removing the fault indicator at
-		deployment. Because the student receives the same proprioceptive
-		observation as the teachers, the 25-point drop is attributable entirely to
-		latent fault inference, and the fact that the student still solves roughly
-		two-thirds of episodes confirms that the active failure mode is, in
-		principle, recoverable from kinematic dynamics alone. The diffusion
-		baseline (which sees the same teacher data but distills a single generative
-		model rather than a routed student) is unable to close this inference gap
-		to the same extent, recovering only about half of episodes and producing
-		twice the residual position error. Together these results provide
-		preliminary support for the central design choice of COMPENSATE: separating
-		the policy capacity that is privileged at training time from the
-		observation budget that must be respected at deployment time. These
-		conclusions are drawn from the Reach task; whether they hold under the
-		richer contact dynamics of Lift and Stack, and under degraded-stiffness
-		and multi-joint faults, is the subject of the remaining evaluations
-		summarized below and detailed in the appendix.
+		The gap between the privileged teacher ensemble (90\%) and the fault-aware
+		student (65\%) quantifies the cost of compressing the per-mode specialists
+		into a single fault-conditioned network. Because the student receives the
+		same observation as the teachers, including the fault indicator, the 25-point
+		drop is attributable to distillation rather than to latent fault inference,
+		and the fact that the student still solves roughly two-thirds of episodes
+		confirms that a single network of this capacity can carry the bulk of the
+		ensemble's behavioural repertoire. The diffusion
+		baseline (which sees the same teacher data and the same fault conditioning
+		but distills a single generative model rather than a routed student) is
+		unable to close this gap to the same extent, recovering only about half of
+		episodes and producing twice the residual position error, indicating that
+		per-environment discriminative routing is more sample-efficient than
+		generative aggregation under this supervision budget. Together these results
+		provide preliminary evidence for the architectural decomposition underlying COMPENSATE:
+		decoupling per-mode PPO training from a single unified, fault-conditioned
+		deployable policy. These conclusions are drawn from the Reach task; whether
+		they hold under the richer contact dynamics of Lift, and under
+		degraded-stiffness and multi-joint faults, is the subject of the remaining
+		evaluations summarized below and detailed in the appendix.
+
+%===============================================================================
+
+\section{Limitations}
+\label{sec:limitations}
+
+	\textbf{Experimental scope.} The reported evaluation covers only the Reach task under per-joint
+	permanent lockouts; degraded-stiffness faults, simultaneous multi-joint faults, and the Lift
+	task are within the framework's modelled fault and task distribution but are
+	not yet reported in the main text. Reach is the kinematic substrate of essentially every
+	manipulation task we consider (Lift reduces to a sequence of Reach
+	sub-goals composed with a gripper or contact event), so the per-joint specialists characterised
+	here transfer directly to that task; nevertheless, a broader experimental sweep would have
+	strengthened the empirical case, and we report preliminary Lift results in
+	the appendix as a partial mitigation. The PPO-without-failures baseline defined in
+	\S\ref{sec:result} is likewise pending. All numbers are sim-only: the zero-shot deployment on
+	the Franka Research~3 and Franka Emika Panda arms is still in progress, so the mjlab
+	cross-simulator probe currently functions as a necessary but not sufficient surrogate for
+	hardware transfer.
+
+	\textbf{Statistical resolution.} The student-vs-diffusion comparison rests on two training
+	seeds per method. The within-method spread is large (COMPENSATE $56\%$ vs.\ $74\%$; diffusion
+	$32\%$ vs.\ $66\%$) and the $16$-percentage-point headline is not yet supported by a sample
+	size sufficient for a statistical-significance claim; a larger seed sweep is required before
+	the gap can be treated as conclusive.
+
+	\textbf{Oracle fault conditioning.} The student consumes a one-hot fault indicator
+	$f\in\mathcal{F}$ supplied by an oracle. We have not characterised performance under noisy,
+	delayed, or incorrect fault labels, nor coupled the controller to an upstream learned
+	fault-detection module; consequently the reported numbers upper-bound what a deployed system
+	would achieve once a realistic detector is inserted.
+
+	\textbf{Ensemble scaling.} The privileged teacher ensemble grows linearly with $|\mathcal{F}|$.
+	The fault set used here ($|\mathcal{F}|=8$: seven single-joint lockouts plus a healthy baseline) is small enough for one PPO
+	specialist per mode to be tractable, but the combinatorial expansion to multi-joint and
+	mixed-mode faults will outpace this scaling and motivate parameter-sharing teachers or
+	hierarchical decompositions that we have not yet developed.
+
+	\textbf{Goal distribution and embodiment.} Reach goals are rejection-sampled to remain
+	reachable under the active lockout, which biases the evaluation toward kinematically feasible
+	targets and may overstate success rates relative to an adversarial goal set. All experiments
+	use a single $7$-DoF Franka model; transfer to other embodiments (mobile manipulators,
+	bi-manual platforms, arms with different redundancy structure) is outside the present
+	evaluation and is expected to require retraining the teacher ensemble from scratch.
 
 %===============================================================================
 
@@ -520,41 +604,38 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 \label{sec:conclusion}
 
 	We presented \textbf{COMPENSATE}, a teacher--student reinforcement learning
-	framework for fault-tolerant control of robotic manipulators that does not
-	rely on an explicit fault-detection signal at deployment. The framework
-	rests on three coupled choices: a privileged teacher ensemble in which one
-	PPO specialist is trained per failure mode so that mode-specific
-	compensations are not averaged away, a fault-blind student distilled by
-	hard per-environment teacher routing so that the active fault must be
-	inferred from proprioception alone, and a staged fault curriculum paired
-	with cross-simulator validation in mjlab that filters out engine-specific
-	artifacts before any hardware trial. Together these choices target the
-	silent-failure regime that classical FDI pipelines and prior teacher-with-
-	privileged-embedding methods do not address.
+	framework for fault-tolerant control of robotic manipulators that compresses a
+	per-mode PPO specialist ensemble into a single fault-conditioned deployable
+	policy. The framework is composed of three interdependent components: a privileged teacher
+	ensemble in which one PPO specialist is optimised per failure mode so that
+	mode-specific compensations are not averaged away by a single multi-task agent,
+	a fault-conditioned student that consumes an explicit fault indicator and is
+	supervised by hard per-environment teacher routing so that the per-mode
+	behaviour repertoire is absorbed by a single network, and a staged fault curriculum
+	paired with zero-shot cross-simulator evaluation in mjlab that rejects policies
+	exploiting simulator-specific contact integration prior to hardware deployment. Jointly, these
+	components mitigate the multi-task interference that destabilises a single PPO agent under
+	mixed-fault training while preserving a single deployable policy at inference.
 
 	Our current evidence is restricted to the Reach task under permanent
 	single-joint lockouts on a Franka Research~3 model. Within this regime the
-	specialist teachers reach a mean success rate of 90.0\% and a mean minimum
-	end-effector error of 0.038~m across the eight failure configurations; the
-	fault-blind student recovers 65.0\% of episodes at 0.051~m, outperforming a
-	diffusion baseline trained on the same teacher data by 16 percentage points
-	of success and roughly halving its residual position error. The 25-point
-	gap between the privileged teachers and the fault-blind student quantifies
-	the cost of withholding the fault indicator, and is the most direct
-	preliminary support we have for the central design choice of decoupling
-	training-time privilege from deployment-time observability.
+	specialist teachers reach a mean success rate of 89.4\% and a mean minimum
+	end-effector error of 0.038~m across the seven single-joint lockouts (with
+	the healthy baseline at 94\%/0.037~m); the
+	fault-aware student recovers 65.0\% of episodes at 0.051~m, outperforming a
+	diffusion baseline trained on the same teacher data and fault conditioning by
+	16 percentage points of success and roughly halving its residual position
+	error. The 24-point gap between the privileged teachers and the student
+	quantifies the cost of compressing the ensemble into a single fault-conditioned
+	network and constitutes the most direct preliminary evidence for the architectural
+	decomposition that separates per-mode optimisation from unified deployment.
 
-	Several evaluations are still in progress. We have not yet reported results
-	on degraded-stiffness or simultaneous multi-joint faults, on the Spline,
-	Lift, and Stack tasks, or against the PPO-without-failures and IK
-	baselines, and the zero-shot hardware deployment on the Franka Research~3
-	and Franka Emika Panda arms remains to be carried out. Beyond completing
-	this experimental sweep, we plan to study generalisation to failure modes
-	outside the teacher set, the sensitivity of the distillation recipe to
-	teacher count and curriculum schedule, and the transfer of the privileged-
-	teacher / fault-blind-student decomposition to other embodiments such as
-	mobile manipulators and bi-manual platforms where the redundancy structure
-	differs.
+	Beyond closing the experimental sweep noted in \S\ref{sec:limitations}, we plan to study
+	generalisation to failure modes outside the teacher set, the sensitivity of the distillation
+	recipe to teacher count and curriculum schedule, the substitution of the oracle fault
+	indicator with an upstream learned detector, and the transfer of the
+	privileged-teacher / fault-conditioned-student decomposition to other embodiments such as
+	mobile manipulators and bi-manual platforms where the redundancy structure differs.
 
 %===============================================================================
 
