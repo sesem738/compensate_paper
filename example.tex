@@ -2,6 +2,9 @@
 
 \usepackage{corl_2026} % Use this for the initial submission.
 \usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
 % \usepackage[final]{corl_2026} % Uncomment for the camera-ready ``final'' version.
 % \usepackage[preprint]{corl_2026} % Uncomment for pre-prints (e.g., arxiv); This is like ``final'', but will remove the CORL footnote.
 
@@ -56,18 +59,21 @@
 %===============================================================================
 
 \begin{abstract}
-	Robotic manipulators operating in industrial and safety-critical environments are vulnerable to joint
-	failures that can abruptly degrade performance, yet existing fault-tolerant strategies rely on accurate
-	dynamic models or predefined recovery procedures that do not generalize across diverse failure modes.
-	We present COMPENSATE, a deep reinforcement learning framework in which specialized teacher policies
-	trained on individual failure configurations are distilled into a unified student policy that detects
-	and adapts to joint failures in real time, without any explicit fault signal. By incorporating
-	permanent lockouts, degraded stiffness, and simultaneous multi-joint faults into the training
-	distribution, COMPENSATE learns compensation strategies that transfer to unseen failure types. We
-	evaluate on reach and lift tasks in IsaacLab with cross-simulator validation in mjlab and zero-shot
-	deployment on a Franka Research~3 arm. Against standard PPO, a diffusion policy baseline, and a
-	fault-aware inverse kinematics controller, COMPENSATE achieves superior task completion rates and
-	adaptation speed while maintaining smooth operational transitions under diverse joint failure conditions.
+	Robotic manipulators in safety-critical settings are vulnerable to silent joint failures that
+	abruptly degrade performance, yet classical fault-tolerant strategies depend on accurate dynamic
+	models or hand-crafted recovery rules that presuppose an explicit fault signal. We present
+	\textbf{COMPENSATE}, a teacher-student reinforcement learning framework for fault-tolerant
+	manipulation built on three coupled choices: a \emph{privileged teacher ensemble} with one PPO
+	specialist per failure mode, a \emph{fault-blind student} distilled by hard per-environment
+	teacher routing so that the active fault must be inferred from proprioception alone, and a
+	\emph{staged fault curriculum} paired with cross-simulator validation in mjlab that filters out
+	engine-specific artifacts before any hardware trial. On a Franka Research~3 reach task under
+	per-joint permanent lockouts, the privileged teachers attain 90.0\% mean success at 0.038~m
+	end-effector error, and the fault-blind student retains 65.0\% success at 0.051~m, outperforming
+	a diffusion policy trained on the same teacher-generated data by 16 percentage points
+	and roughly half the residual position error. The 25-point teacher-to-student gap quantifies
+	the cost of withholding the fault indicator and supports the central design choice of decoupling
+	training-time privilege from deployment-time observability.
 \end{abstract}
 
 % Two or three meaningful keywords should be added here
@@ -81,7 +87,7 @@
 	high-precision tasks with speed and reliability~\citep{ali2018vision, ghodsian2023mobile}. Recent
 	advances in artificial intelligence~(AI) have expanded the capabilities of robotic systems, enabling
 	them to learn, adapt, and make independent decisions~\citep{sun2021artificial, liu2021deep,
-	li2024manipllm}. Yet despite these advances, a fundamental vulnerability persists: mechanical
+	li2024manipllm}.  Despite these advances, a fundamental vulnerability persists: mechanical
 	malfunctions (arising from joint wear, actuator fatigue, or unexpected environmental loading) can
 	abruptly degrade performance or cause complete task failure~\citep{291826, sciavicco2012modelling}.
 	As manipulators are deployed in safety-critical domains such as healthcare, manufacturing, and field
@@ -100,12 +106,12 @@
 
 	Machine learning has begun to close this gap. Predictive maintenance and anomaly detection models can
 	anticipate failures before they occur or flag deviations during operation~\citep{lian2022anomaly,
-	eski2011fault}, and recent work demonstrates that learning directly from observed robot failures
-	(including recovery in long-horizon manipulation tasks) is feasible~\citep{huang2025fail2progress}.
+	eski2011fault}.  Recent work has demonstrated learning directly from observed robot failures
+	(including recovery in long-horizon manipulation tasks)~\citep{huang2025fail2progress}.
 	Generative approaches such as counterfactual failure synthesis can further produce diverse fault
 	rollouts from successful demonstrations, reaching 81.3\% correction accuracy~\citep{wang2025learning}.
 	Nevertheless, these methods presuppose either a corpus of failure demonstrations or an explicit
-	fault-detection signal as input; when a joint degrades silently mid-task and no labeled failure data
+	fault-detection signal as input. When a joint degrades silently mid-task and no labeled failure data
 	are available, they cannot generate an online, adaptive control response.
 
 	The robotics community has increasingly turned to reinforcement learning~(RL) to overcome this
@@ -114,16 +120,20 @@
 	label~\citep{fu2025contrastive}. For visuomotor policies, latent-space RL can steer a pretrained
 	diffusion policy toward successful outcomes with minimal additional
 	samples~\citep{wagenmaker2025steering}, and sim-to-real transfer via massive parallel sampling with
-	active domain exploration has demonstrated 42--63\% performance gains over strong
+	active domain exploration has demonstrated 42\%-63\% performance gains over strong
 	baselines~\citep{sobanbabu2025sampling}. These results confirm that RL-based adaptation is a
 	principled direction for fault-tolerant robotics, yet they only address locomotion. The specific
 	challenge of reactive joint-failure compensation for \emph{robot manipulator} reaching tasks in real
 	hardware deployments remains underexplored.
-
-	To address this gap, we present \textbf{COMPENSATE}, a teacher-student reinforcement learning
-	framework for fault-tolerant manipulator control. The framework rests on three coupled choices.
-	\emph{(i)}~A \emph{privileged teacher ensemble} in which one PPO specialist is trained per
-	failure mode, so that mode-specific compensations are not averaged away by a single multi-task
+    \begin{figure}
+        \centering
+        \includegraphics[width=0.7\linewidth]{figures/COMPENSATE.pdf}
+        \caption{Demonstrates the workflow of COMPENSATE framework for creating a fault tolerant policy.}
+        \label{fig:COMPENSATE}
+    \end{figure}
+	To address this gap, we present \textbf{COMPENSATE}, a teacher-student RL
+	framework for fault-tolerant manipulator control. The framework rests on three coupled choices:
+	\emph{(i)}~A \emph{privileged teacher ensemble} in which one proximal policy optimization (PPO) specialist is trained for each failure mode, such that mode-specific compensations are not averaged away by a single multi-task
 	agent. \emph{(ii)}~A \emph{fault-blind student} distilled by hard per-environment teacher
 	routing, with no fault indicator in its observation, so that the active fault must be inferred
 	from proprioception alone, matching what is available on hardware. \emph{(iii)}~A \emph{staged
@@ -141,10 +151,9 @@
 	\textbf{Classical fault-tolerant control.} Fault-tolerant control for robotic manipulators has long
 	relied on model-based methods. Early strategies applied passive and active hardware redundancy so that
 	joint failures would not halt operation, while fault diagnosis and isolation~(FDI) detected deviations
-	from known system models~\citep{blanke, 291826, sciavicco2012modelling}. More recent designs embed
-	backstepping or sliding-mode controllers that maintain tracking under actuator
+	from known system models~\citep{blanke, 291826, sciavicco2012modelling}. More recent designs embed 	backstepping or sliding-mode controllers that maintain tracking under actuator
 	faults~\citep{anand2012fault, mokhtari2022fault, act11120353}. These methods are analytically rigorous
-	but require accurate dynamics models and hand-crafted recovery rules, limiting their applicability to
+	but require accurate dynamic models and hand-crafted recovery rules, limiting their applicability to
 	anticipated, well-characterized fault modes.
 
 	\textbf{Learning-based fault detection and diagnosis.} Data-driven methods have substantially improved
@@ -174,11 +183,11 @@
 	is distilled into a student that operates on deployable observations alone~\citep{kumar2021rma}.
 	Latent-space RL can further steer a pre-trained policy toward correct behavior with minimal additional
 	samples~\citep{wagenmaker2025steering}, and active-exploration system identification during sim-to-real
-	transfer yields 42--63\% performance gains over standard domain
+	transfer yields 42\%-63\% performance gains over standard domain
 	randomization~\citep{sobanbabu2025sampling}. COMPENSATE applies this paradigm to manipulator fault
 	tolerance: fault-specialized teacher policies are distilled into a single student that compensates for
-	joint failures zero-shot on physical hardware. The next section formalises this setting as a
-	POMDP and develops the three components in turn.
+	joint failures zero-shot on physical hardware. The next section formalizes this setting as a
+	Partially Observable Markov 		Decision Process~(POMDP) and develops the three components in turn.
 
 
 %===============================================================================
@@ -192,7 +201,7 @@
 	fault-detection module we wish to avoid. \textbf{COMPENSATE} therefore separates training-time
 	privilege from deployment-time observability through three coupled components: a
 	\emph{privileged teacher ensemble} (\S\ref{subsec:teachers}) that converges to mode-specific
-	compensations rather than an averaged behaviour, a \emph{staged fault curriculum}
+	compensations rather than an averaged behavior, a \emph{staged fault curriculum}
 	(\S\ref{subsec:curriculum}) that keeps PPO stable as the fault set widens, and a
 	\emph{fault-blind student} (\S\ref{subsec:distillation}) distilled by hard per-environment
 	teacher routing so that compensation is inferred from kinematic history alone. We first
@@ -201,24 +210,22 @@
 	\subsection{Problem Formulation}
 	\label{subsec:problem}
 
-		We model joint-failure-resilient manipulation as a Partially Observable Markov
-		Decision Process~(POMDP)
+		We model joint-failure-resilient manipulation as a POMDP
 		$\langle\mathcal{S},\mathcal{O},\mathcal{A},T,R,\gamma\rangle$. The full state
-		$s\in\mathcal{S}$ contains the joint positions, joint velocities, and the
+		$s\in\mathcal{S}$ contains the joint positions $q\in \mathbb{R}^n$, joint velocities $\dot q$, and the
 		currently active failure configuration, but the policy never observes the
-		failure component: $o\in\mathcal{O}$ is restricted to relative joint positions
-		$q$, relative joint velocities $\dot q$, the previous action $a_{t-1}$, and the
+		failure component: $o\in\mathcal{O}$ is restricted to relative joint positions, relative joint velocities, the previous action $a_{t-1}$, and the
 		goal end-effector pose $g$ (3D position and unit quaternion). This deliberate
 		partial observability is the methodological core of the work: it forces the
 		agent to recover the latent failure state from observable kinematics, mirroring
 		the information available on a real arm whose joint has silently degraded.
 
-		Actions $a\in\mathcal{A}$ are relative joint-position increments scaled by
-		$\alpha$. We consider a set $\mathcal{F}$ of failure configurations comprising
+		Actions $a\in\mathcal{A}\subset \mathbb{R}^n$ are relative joint-position increments scaled by
+		$\alpha\in \mathbb{R}_{>0}$. We consider a set $\mathcal{F}=\{f_1 \ldots f_n\}$ of failure configurations comprising
 		single-joint permanent lockouts and a healthy baseline; degraded-stiffness and
 		multi-joint variants are introduced in~\S\ref{subsec:curriculum}. Under lockout
 		$f_i$, joint $i$ holds its last commanded position regardless of the network
-		output, modelling a fault that the controller cannot bypass at the actuator
+		output, modeling a fault that the controller cannot bypass at the actuator
 		level:
 		\begin{equation}
 		    q_t^{\mathrm{cmd}, i} =
@@ -228,7 +235,7 @@
 		        \end{cases}
 		    \label{eq:action}
 		\end{equation}
-		Modelling the fault inside the action transition (rather than as an external
+		Modeling the fault inside the action transition (rather than as an external
 		disturbance on $T$) ensures that the gradient seen by the teacher reflects what
 		the deployed arm will actually execute, eliminating a source of train--test
 		drift that would otherwise have to be handled by domain randomization.
@@ -236,7 +243,7 @@
 	\subsection{Privileged Teacher Ensemble}
 	\label{subsec:teachers}
 
-		Different joint failures induce qualitatively different optimal compensations:
+		Different joint failures require qualitatively different optimal compensations; e.g.,
 		a locked shoulder must be circumvented by elbow and wrist redundancy, while a
 		locked wrist requires a base-driven reorientation. A single PPO agent confronted
 		with the full fault distribution receives gradient signals that pull these
@@ -258,8 +265,8 @@
 		where $r_\mathrm{fine}$ is a kernel-smoothed fine-positioning bonus and
 		$r_\mathrm{reg}$ penalizes action rate and joint velocity. The fine-grained and
 		regularization weights are annealed from zero so that the agent first learns to
-		\emph{reach} under the active fault before being asked to do so \emph{smoothly};
-		without this annealing we observed teachers collapsing to a still posture that
+		\emph{reach} under the active fault before being asked to do so \emph{smoothly}. 
+		Without this annealing, we observed teachers collapsing to a still posture that
 		trivially satisfies the regularizer. Goal poses are sampled by drawing random
 		joint configurations, computing forward kinematics, and rejecting any pose
 		outside the reachable workspace of the locked joint, so the reward signal is
@@ -281,7 +288,7 @@
 		and is the only mechanism, aside from the privileged-teacher decomposition
 		itself, that we found necessary to obtain stable PPO convergence under
 		multi-joint and degraded-stiffness faults. The student does not use a
-		curriculum: by the time distillation begins, all teachers are fixed, so
+		curriculum.  By the time distillation begins, all teachers are fixed, so
 		uniform sampling over $\mathcal{F}$ poses no instability.
 
 	\subsection{Fault-Blind Student Distillation}
@@ -292,14 +299,14 @@
 		teachers but \emph{no fault index}; the failure mode is a latent variable that
 		the student must infer from kinematic history. This is what distinguishes
 		COMPENSATE from prior teacher--student work that includes the privileged
-		variable as a learned embedding~\citep{kumar2021rma}: we make the absence of
+		variable as a learned embedding~\citep{kumar2021rma}.  We make the absence of
 		the fault signal a deployment requirement, not a regularization trick, because
 		any fault label at deployment time would presuppose the very FDI module our
 		method is designed to replace.
 
 		At each distillation reset, every parallel environment is independently
-		assigned a configuration $c$ and routed to the corresponding teacher~$\pi^c$;
-		that teacher provides the behavioral target for that environment for the
+		assigned a configuration $c$ and routed to the corresponding teacher~$\pi^c$.
+		That teacher provides the behavioral target for that environment for the
 		entire episode. We use this \emph{hard routing} rather than averaging
 		teacher logits because the teachers represent mode-specific compensations that
 		are non-interpolable, so averaging would supervise the student with actions no
@@ -331,9 +338,8 @@
 		joint-position increments with scale $\alpha=0.03$~rad. The teacher set
 		$\mathcal{F}$ contains $|\mathcal{F}|=8$ single-joint permanent lockout
 		configurations across the actuated degrees of freedom of the FR3 model.
-		The reach task resamples random
-		end-effector goals every 6~s with success defined as $\le 0.04$~m position
-		error and $\le 0.2$~rad orientation error; additive uniform observation noise
+		The reach task resamples random 	end-effector goals every 6~s with success defined as $\le 0.04$~m position
+		error and $\le 0.2$~rad orientation error.  Additive uniform observation noise
 		of $\pm 0.01$~rad is injected on joint positions, velocities, and action
 		feedback throughout training.
 
@@ -452,7 +458,7 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 		(56\%, 74\%) at a mean minimum error of \textbf{0.051~m}, while the
 		diffusion baseline reaches \textbf{49.0\%} (32\%, 66\%) at \textbf{0.100~m}.
 		COMPENSATE thus improves over the diffusion baseline by \textbf{16
-		percentage points} of success and approximately halves the mean minimum
+		percentage points} and approximately halves the mean minimum
 		position error on the same teacher-generated supervision. The gap between
 		the two diffusion seeds (32\% vs. 66\%) is also nearly twice that of
 		COMPENSATE (56\% vs. 74\%), suggesting that the per-environment teacher
@@ -496,7 +502,7 @@ To benchmark the proposed method, we compare it against three baselines: a stand
 		latent fault inference, and the fact that the student still solves roughly
 		two-thirds of episodes confirms that the active failure mode is, in
 		principle, recoverable from kinematic dynamics alone. The diffusion
-		baseline (which sees the same teacher data but distils a single generative
+		baseline (which sees the same teacher data but distills a single generative
 		model rather than a routed student) is unable to close this inference gap
 		to the same extent, recovering only about half of episodes and producing
 		twice the residual position error. Together these results provide
