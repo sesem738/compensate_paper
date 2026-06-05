@@ -75,10 +75,7 @@
 	single-joint lockouts, and the fault-conditioned
 	student retains $65.0\%$ success at $0.051$~m, exceeding a diffusion policy distilled from the
 	same supervision and fault conditioning by $16$ percentage points of success while halving the
-	residual position error. The $\approx\!24$-point teacher-to-student deficit quantifies the
-	behavioural-cloning loss incurred when the per-mode specialist ensemble is compressed into a
-	single fault-conditioned network and substantiates the architectural decomposition that
-	separates mode-specific policy optimisation from unified, conditioning-driven deployment.
+	residual position error. 
 \end{abstract}
 
 % Two or three meaningful keywords should be added here
@@ -320,7 +317,7 @@
 		averaging teacher logits because the teachers represent mode-specific compensations that
 		are non-interpolable, so averaging would supervise the student with actions no single
 		teacher would take. Given minibatches $\{(o_k, f_k, a_k^c)\}_{k=1}^{B}$, the student
-		minimizes the per-action behavioural-cloning loss
+		minimizes the per-action behavioral-cloning loss
 		\begin{equation}
 		    \mathcal{L}_\mathrm{BC} =
 		        \frac{1}{B}\sum_{k=1}^{B}
@@ -504,7 +501,7 @@ The COMPENSATE evaluation covers two manipulation tasks (Reach and Lift) and two
 		drop is attributable to distillation rather than to latent fault inference,
 		and the fact that the student still solves roughly two-thirds of episodes
 		confirms that a single network of this capacity can carry the bulk of the
-		ensemble's behavioural repertoire. The diffusion
+		ensemble's behavioral repertoire. The diffusion
 		baseline (which sees the same teacher data and the same fault conditioning
 		but distills a single generative model rather than a routed student) is
 		unable to close this gap to the same extent, recovering only about half of
@@ -563,7 +560,7 @@ The COMPENSATE evaluation covers two manipulation tasks (Reach and Lift) and two
 	architectural decomposition.
 
 	Future work, beyond closing the experimental sweep noted in \S\ref{sec:limitations}, includes
-	generalisation to out-of-distribution fault modes, sensitivity of the distillation recipe to
+	generalization to out-of-distribution fault modes, sensitivity of the distillation recipe to
 	teacher count and curriculum schedule, substitution of the oracle fault indicator with a
 	learned detector, and transfer to embodiments with different redundancy structure.
 
